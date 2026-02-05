@@ -1,0 +1,62 @@
+# ===============================
+# Core Python & Utilities
+# ===============================
+numpy>=1.23
+pandas>=1.5
+scipy>=1.9
+joblib>=1.2
+
+# ===============================
+# Machine Learning
+# ===============================
+scikit-learn>=1.2
+xgboost>=1.7
+lightgbm>=3.3
+
+# ===============================
+# Deep Learning (for Autoencoders - optional but future-proof)
+# ===============================
+torch>=2.0
+torchvision>=0.15
+
+# ===============================
+# Network Traffic Processing
+# ===============================
+nfstream>=6.5
+pyshark>=0.6
+scapy>=2.5
+
+# ===============================
+# Visualization & Analysis
+# ===============================
+matplotlib>=3.6
+seaborn>=0.12
+plotly>=5.15
+
+# ===============================
+# Notebooks & Experimentation
+# ===============================
+jupyterlab>=3.6
+ipykernel>=6.20
+tqdm>=4.65
+
+# ===============================
+# Feature Encoding & Utilities
+# ===============================
+category-encoders>=2.6
+imbalanced-learn>=0.10
+
+# ===============================
+# Model Tracking & Reproducibility (optional but good practice)
+# ===============================
+mlflow>=2.4
+
+# ===============================
+# File Handling
+# ===============================
+pyyaml>=6.0
+
+# ===============================
+# System / OS Compatibility
+# ===============================
+psutil>=5.9
