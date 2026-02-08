@@ -1,0 +1,53 @@
+# System Configuration Template
+# Copy this file to system_config.yaml and update paths for your system
+
+system:
+  # System identifier: "local" or "nal_csir"
+  name: "local"
+  
+  # Environment: "development" or "production"
+  environment: "development"
+
+paths:
+  # Root directory for all data
+  # Update this path based on your system
+  data_root: "${NAL_DATA_ROOT}"  # Uses environment variable, or set absolute path
+  
+  # Where to store trained models
+  models_root: "./artifacts/models"
+  
+  # Where to store results and reports
+  results_root: "./results"
+  
+  # Subdirectories (auto-constructed from data_root)
+  raw_data: "${data_root}/raw"
+  external_datasets: "${data_root}/external"
+  processed_data: "${data_root}/processed"
+  interim_data: "${data_root}/interim"
+
+# System-specific overrides
+# Uncomment and update for your system
+# local:
+#   data_root: "C:/Users/Anand Ojha/nal_project/nal/data"
+# 
+# nal_csir:
+#   data_root: "/path/to/cicids/data/at/nal"
+
+logging:
+  level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: "./logs/app.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  console: true
+
+# Dataset configuration
+dataset:
+  name: "cicids2017"
+  days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+  file_format: "csv"  # Options: csv, parquet
+  encoding: "utf-8"
+
+# Performance settings
+performance:
+  n_jobs: -1  # -1 = use all CPUs
+  batch_size: 1000
+  chunk_size: 10000  # For processing large files in chunks
