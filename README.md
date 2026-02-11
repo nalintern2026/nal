@@ -47,3 +47,75 @@ Adaptive flow-level ML framework for supervised traffic classification, unsuperv
 - Track dataset provenance and assumptions in `docs/dataset_notes.md`.
 - Log experiments (configs, seeds, metrics) in `docs/experiment_log.md`.
 - Document feature definitions and encoding choices in `docs/feature_description.md`.
+
+
+ictd@ICTD:~/Desktop/Network$ tree -L 6
+.
+└── nal
+    ├── configs
+    │   └── system_config.template.yaml
+    ├── data
+    │   ├── processed
+    │   │   ├── bsnl
+    │   │   └── cic_ids
+    │   │       ├── cleaned
+    │   │       ├── features
+    │   │       └── flows
+    │   │           ├── friday
+    │   │           ├── monday
+    │   │           ├── thursday
+    │   │           ├── tuesday
+    │   │           └── wednesday
+    │   ├── raw
+    │   │   ├── bsnl
+    │   │   │   └── raw_flows
+    │   │   ├── cic_ids
+    │   │   │   ├── metadata
+    │   │   │   ├── pcap
+    │   │   │   │   ├── Friday-WorkingHours.pcap
+    │   │   │   │   ├── Monday-WorkingHours.pcap
+    │   │   │   │   ├── Thursday-WorkingHours.pcap
+    │   │   │   │   ├── Tuesday-WorkingHours.pcap
+    │   │   │   │   └── Wednesday-workingHours.pcap
+    │   │   │   └── pcap_chunks
+    │   │   │       ├── friday
+    │   │   │       ├── monday
+    │   │   │       ├── thursday
+    │   │   │       ├── tuesday
+    │   │   │       └── wednesday
+    │   │   └── unsw_nb15
+    │   │       ├── csv
+    │   │       └── documentation
+    │   └── README.md
+    ├── docs
+    │   ├── dataset_notes.md
+    │   ├── experiment_log.md
+    │   └── feature_description.md
+    ├── README.md
+    ├── requirements.txt
+    ├── results
+    │   └── README.md
+    ├── scripts
+    │   ├── pcap_chunks_to_flows.py
+    │   └── setup_project.py
+    └── src
+        ├── data_collection
+        │   └── __init__.py
+        ├── decision_engine
+        │   └── __init__.py
+        ├── feature_engineering
+        │   └── __init__.py
+        ├── __init__.py
+        ├── models
+        │   ├── __init__.py
+        │   ├── supervised
+        │   │   └── __init__.py
+        │   └── unsupervised
+        │       └── __init__.py
+        ├── preprocessing
+        │   └── __init__.py
+        ├── README.md
+        └── visualization
+            └── __init__.py
+
+42 directories, 25 files

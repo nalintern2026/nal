@@ -25,6 +25,7 @@ torchvision>=0.15
 nfstream>=6.5
 pyshark>=0.6
 scapy>=2.5
+cicflowmeter>=0.5
 
 # ===============================
 # Visualization & Analysis
