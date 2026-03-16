@@ -216,3 +216,120 @@ Upload (CSV/PCAP) → [PCAP→CSV if needed] → read chunks → clean_data()
 - `training_pipeline/models/supervised/rf_model.pkl` — Random Forest (optional)
 - `training_pipeline/models/artifacts/scaler.pkl` — Feature scaler
 - `training_pipeline/models/artifacts/feature_names.pkl` — 79 feature names
+
+---
+
+## 10. Active Analysis: End-to-End Flow
+
+1. **User** starts Active Monitoring and selects an interface (e.g. `lo`, `enp0s31f6`).
+2. **Backend** starts a background thread that runs every **5 seconds**:
+   - **Capture:** `scapy.sniff(iface=interface, timeout=5, count=50000)` on that interface.
+   - **Build flows:** Packets are grouped by (src_ip, dst_ip, src_port, dst_port, protocol); 79 features are computed per flow.
+   - **Classify:** Same pipeline as passive: scale features → IF predict/decision_function → if anomaly, infer threat type from rules → compute risk.
+   - **Insert:** Flows are written to the DB with `monitor_type = 'active'`.
+3. **Dashboard / Traffic / Anomalies** read from the same DB; the "Active" toggle filters by `monitor_type = 'active'`.
+
+No separate "active analysis" process — it’s the same classification pipeline fed by live capture instead of an uploaded file.
+
+---
+
+## 11. Criteria & Threshold Values (Reference)
+
+### 11.1 Anomaly decision (Isolation Forest)
+
+| Item | Value | Meaning |
+|------|--------|--------|
+| Contamination | 0.01 | ~1% of flows treated as anomalous |
+| Anomaly flag | `predict(X) == -1` | Binary: flow is anomaly or not |
+| Score transform | `0.5 - decision_function(X)`, clip to [0,1] | Display anomaly_score |
+
+### 11.2 Risk level (risk_score in [0, 1])
+
+| Level | Threshold |
+|-------|-----------|
+| Critical | risk > 0.8 |
+| High | risk > 0.6 |
+| Medium | risk > 0.3 |
+| Low | risk ≤ 0.3 |
+
+### 11.3 Threat-type rules (when flow is anomalous)
+
+| Threat | Criteria |
+|--------|----------|
+| PortScan | 1 ≤ tot_pkts ≤ 6 and (syn_cnt ≥ 1 or duration < 3 s) |
+| Brute Force | TCP, dst_port ∈ {21,22,23,3389,445}, 2–300 pkts, duration < 180 s |
+| DDoS | flow_pkts_s > 1500 **or** flow_bytes_s > 1e6 **or** tot_pkts > 500 in <15 s **or** total_bytes > 5e6 in <60 s **or** anomaly_score > 0.85 and (flow_pkts_s > 200 or tot_pkts > 100) |
+| Web Attack | dst_port ∈ {80,443}, TCP, total_bytes > 20000, tot_pkts ≥ 4 |
+| Heartbleed | dst_port 443, 2–25 pkts, 50 ≤ avg_pkt_len ≤ 300 |
+| Bot | flow_pkts_s > 200 and tot_pkts ≥ 8 **or** UDP and tot_pkts > 20 and anomaly_score > 0.4 **or** anomaly_score > 0.65 and tot_pkts ≥ 15 |
+| Infiltration | dst_port not in {21,22,23,80,443,3389,445}, tot_pkts ≥ 4, total_bytes > 500 |
+| (Score fallback) | anomaly_score > 0.8 → DDoS; > 0.6 → Bot; > 0.45 → Bot; 1–8 pkts → PortScan; else Anomaly |
+
+### 11.4 Capture settings
+
+| Setting | Value |
+|--------|--------|
+| Window duration | 5 seconds |
+| Max packets per window | 50,000 |
+| Default interface if none selected | `lo` |
+
+---
+
+## 12. On Which Network It Works
+
+Active monitoring does **not** target “a network” by name or VLAN. It runs on **whatever interface you choose** on the machine where the backend runs:
+
+- **`lo`** — Loopback. Traffic to/from the same machine (e.g. browser ↔ backend on that server). Good for testing.
+- **`eth0` / `enp0s31f6` / etc.** — Physical or virtual NIC. All traffic seen by that interface (the segment that NIC is attached to) is captured.
+
+So:
+
+- On your laptop: you see traffic on the interface you select (e.g. Wi‑Fi or Ethernet).
+- On a server in the NAL server room: you see traffic on the interface you select on **that server** (e.g. the NIC connected to the server-room network). No config change is required for “which network” — you just pick the right interface in the UI (list comes from Scapy `get_if_list()` on that host).
+
+---
+
+## 13. Running on Another Server (e.g. NAL Server Room)
+
+You do **not** need to change backend or frontend **code** to run on a different server. You only need **configuration** so that the frontend can reach the backend and (optionally) so the backend listens on the right address.
+
+### 13.1 Backend on the other server
+
+- Copy/deploy the NAL app (backend + frontend build, or run frontend in dev) on that machine.
+- Run the backend with **sudo** (required for packet capture), e.g.:
+  ```bash
+  cd nal/backend && sudo .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+  ```
+- `--host 0.0.0.0` makes the API reachable from other hosts (e.g. your laptop or another VM). Port `8000` is the default; you can change it if needed.
+
+### 13.2 Frontend reaching the backend
+
+The frontend calls the API using **one base URL**. That URL is set by:
+
+- **Build-time:** `VITE_API_URL` when you run `npm run build`.
+- **Default if unset:** `http://localhost:8000/api` (only works when the browser and backend are on the same host).
+
+So:
+
+- **Option A — Backend on same host as frontend (e.g. both on the NAL server):**  
+  - Serve the frontend (e.g. `npm run build` then serve `dist/`, or `npm run dev`).  
+  - If you use the default and open the UI on that server (e.g. `http://server-ip:5173`), the browser will call `localhost:8000` **from the user’s machine**. That only works if the user is on the server itself (e.g. VNC/RDP to the server).  
+  - If users open the UI from their laptop, set `VITE_API_URL` to the **backend’s URL** (e.g. `http://NAL-SERVER-IP:8000/api`), then rebuild the frontend.
+
+- **Option B — Backend on NAL server, frontend on your laptop (or vice versa):**  
+  - Set `VITE_API_URL=http://NAL-SERVER-IP:8000/api` (replace `NAL-SERVER-IP` with the server’s IP or hostname).  
+  - Run `npm run build` in the frontend; serve the built files or run `npm run dev` (dev proxy can point to the same URL).  
+  - No backend or frontend **code** changes — only this env var and rebuild.
+
+### 13.3 Summary: what you actually change
+
+| What | Change |
+|------|--------|
+| Backend code | None |
+| Frontend code | None |
+| Backend run | Same command, on the new server, with `--host 0.0.0.0` if accessed from other hosts |
+| Frontend API URL | Set `VITE_API_URL` to `http://<backend-host>:8000/api` and rebuild (or run dev with that env) |
+| Active monitoring interface | Choose the correct interface on the NAL server in the UI (e.g. the NIC facing the network you want to monitor) |
+| Firewall | Allow port 8000 (and 5173 if you serve frontend on the server) as needed |
+
+So: **no backend/frontend code edits**; only deploy, config (API URL), and choosing the right interface for active monitoring.
