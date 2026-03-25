@@ -249,7 +249,14 @@ export default function Dashboard() {
                     <div className="h-56">
                         <Line
                             data={{
-                                labels: (statsData.timeline || []).map(t => t.hour),
+                                labels: (statsData.timeline || []).map(t => {
+                                    const raw = String(t.hour || '').trim();
+                                    if (!raw) return '';
+                                    let dt = new Date(raw.includes('T') ? raw + ':00Z' : raw);
+                                    if (Number.isNaN(dt.getTime())) dt = new Date(raw);
+                                    if (Number.isNaN(dt.getTime())) return raw;
+                                    return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                }),
                                 datasets: [
                                     {
                                         label: 'Total Flows',
@@ -312,7 +319,7 @@ export default function Dashboard() {
                                         displayColors: true,
                                         boxPadding: 4,
                                         callbacks: {
-                                            title: (items) => items[0] ? `Time: ${items[0].label}` : '',
+                                            title: (items) => items[0] ? `Time: ${items[0].label} (UTC)` : '',
                                             label: (ctx) => ` ${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString()} flows`,
                                         },
                                     },

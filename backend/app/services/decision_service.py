@@ -9,6 +9,7 @@ import sys
 import logging
 import subprocess
 import uuid
+from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -179,6 +180,13 @@ class DecisionEngine:
                 if chunk is None or chunk.empty:
                     continue
 
+                chunk.columns = chunk.columns.str.strip()
+                original_timestamps = None
+                for ts_col in ('Timestamp', 'timestamp'):
+                    if ts_col in chunk.columns:
+                        original_timestamps = chunk[ts_col].copy()
+                        break
+
                 df_clean = clean_data(chunk)
                 if df_clean.empty:
                     continue
@@ -242,6 +250,7 @@ class DecisionEngine:
                         totlen_fwd = df_clean.get('Total Length Fwd Packets', df_clean.get('totlen_fwd_pkts', None)).iloc[i] if 'Total Length Fwd Packets' in df_clean or 'totlen_fwd_pkts' in df_clean else None
                         totlen_bwd = df_clean.get('Total Length Bwd Packets', df_clean.get('totlen_bwd_pkts', None)).iloc[i] if 'Total Length Bwd Packets' in df_clean or 'totlen_bwd_pkts' in df_clean else None
                         dst_port = df_clean.get('Destination Port', df_clean.get('dst_port', None)).iloc[i] if 'Destination Port' in df_clean or 'dst_port' in df_clean else None
+                        src_port = df_clean.get('Source Port', df_clean.get('src_port', None)).iloc[i] if 'Source Port' in df_clean or 'src_port' in df_clean else None
                         proto = df_clean.get('Protocol', df_clean.get('protocol', None)).iloc[i] if 'Protocol' in df_clean or 'protocol' in df_clean else None
                         syn_cnt = df_clean.get('SYN Flag Count', df_clean.get('syn_flag_cnt', None)).iloc[i] if 'SYN Flag Count' in df_clean or 'syn_flag_cnt' in df_clean else None
                         flow_features = {
@@ -253,6 +262,7 @@ class DecisionEngine:
                             "total_length_fwd": totlen_fwd, "totlen_fwd_pkts": totlen_fwd,
                             "total_length_bwd": totlen_bwd, "totlen_bwd_pkts": totlen_bwd,
                             "dst_port": dst_port, "Destination Port": dst_port,
+                            "src_port": src_port, "Source Port": src_port,
                             "protocol": proto, "Protocol": proto,
                             "syn_flag_cnt": syn_cnt, "SYN Flag Count": syn_cnt,
                         }
@@ -292,6 +302,23 @@ class DecisionEngine:
                     totlen_fwd = df_clean.get('Total Length Fwd Packets', df_clean.get('totlen_fwd_pkts', None)).iloc[i] if 'Total Length Fwd Packets' in df_clean or 'totlen_fwd_pkts' in df_clean else None
                     totlen_bwd = df_clean.get('Total Length Bwd Packets', df_clean.get('totlen_bwd_pkts', None)).iloc[i] if 'Total Length Bwd Packets' in df_clean or 'totlen_bwd_pkts' in df_clean else None
 
+                    flow_ts = None
+                    if original_timestamps is not None:
+                        try:
+                            orig_idx = df_clean.index[i]
+                            raw_ts = original_timestamps.loc[orig_idx]
+                            if pd.notna(raw_ts):
+                                parsed = pd.Timestamp(raw_ts)
+                                if parsed.tzinfo is None:
+                                    parsed = parsed.tz_localize('UTC')
+                                else:
+                                    parsed = parsed.tz_convert('UTC')
+                                flow_ts = parsed.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+                        except Exception:
+                            flow_ts = None
+                    if flow_ts is None:
+                        flow_ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+
                     row = {
                         "id": str(uuid.uuid4())[:8],
                         "analysis_id": process_id,
@@ -308,7 +335,7 @@ class DecisionEngine:
                         "total_length_bwd": _safe_int(totlen_bwd),
                         "flow_bytes_per_sec": _safe_float(flow_bytes_s),
                         "flow_packets_per_sec": _safe_float(flow_packets_s),
-                        "timestamp": pd.Timestamp.now().isoformat(),
+                        "timestamp": flow_ts,
                         "classification": lbl,
                         "threat_type": threat_type_val,
                         "cve_refs": cve_refs_str,
@@ -639,7 +666,7 @@ class DecisionEngine:
                 "total_length_bwd": _safe_int(r.get("totlen_bwd_pkts", r.get("Total Length of Bwd Packets"))),
                 "flow_bytes_per_sec": _safe_float(r.get("flow_byts_s", r.get("Flow Bytes/s"))),
                 "flow_packets_per_sec": _safe_float(r.get("flow_pkts_s", r.get("Flow Packets/s"))),
-                "timestamp": pd.Timestamp.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z',
                 "classification": lbl,
                 "threat_type": threat_type_val,
                 "cve_refs": cve_refs_str,

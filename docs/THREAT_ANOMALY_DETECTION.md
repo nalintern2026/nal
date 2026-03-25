@@ -119,9 +119,8 @@ When the supervised model says BENIGN but IF says anomaly, the system infers a t
 | Label | Anomaly Score Threshold |
 |-------|--------------------------|
 | DDoS | > 0.8 |
-| Bot | > 0.6 |
-| Bot (alternative) | > 0.45 |
-| Anomaly | ≤ 0.45 (default) |
+| Bot | > 0.6 (non-HTTP/HTTPS ports; see notes) |
+| Anomaly | ≤ 0.6 (default when no specific rule matches) |
 
 ### 6.2 Rule-Based Criteria (Evaluated in Order)
 

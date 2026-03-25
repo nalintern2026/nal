@@ -7,7 +7,7 @@ import logging
 import threading
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -380,7 +380,7 @@ class RealtimeMonitor:
                     f["analysis_id"] = None
                     f["upload_filename"] = "realtime"
                     f["id"] = str(uuid.uuid4())[:8]
-                    f["timestamp"] = datetime.utcnow().isoformat() + "Z"
+                    f["timestamp"] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
 
                 db.insert_flows(enriched, monitor_type="active")
                 logger.info(f"Inserted {len(enriched)} active flows from {len(packets)} packets")

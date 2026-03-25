@@ -62,6 +62,9 @@ def infer_anomaly_threat_type(flow_features: dict, anomaly_score: float) -> str:
     dst_port = _safe_int(flow_features.get("dst_port"), -1)
     if dst_port == -1:
         dst_port = _safe_int(flow_features.get("Destination Port"), -1)
+    src_port = _safe_int(flow_features.get("src_port"), -1)
+    if src_port == -1:
+        src_port = _safe_int(flow_features.get("Source Port"), -1)
     # Protocol can be string ("TCP") or numeric (6, 17) from CSV/DataFrame - normalize to string
     _p = flow_features.get("protocol") or flow_features.get("Protocol") or ""
     if hasattr(_p, "upper"):
@@ -106,27 +109,33 @@ def infer_anomaly_threat_type(flow_features: dict, anomaly_score: float) -> str:
         if 50 <= avg_len <= 300:
             return "Heartbleed"
 
-    # ─── Bot: high rate or UDP with many packets ───
-    if flow_pkts_s > 200 and tot_pkts >= 8:
+    # ─── Bot: high rate or UDP with many packets (avoid over-flagging generic HTTPS) ───
+    # Strong Bot-like: very high packet rate on any non-trivial flow, but ignore common web ports.
+    if flow_pkts_s > 200 and tot_pkts >= 8 and dst_port not in (80, 443):
         return "Bot"
+    # UDP-heavy anomalies are often scanners/bots.
     if proto == "UDP" and tot_pkts > 20 and anomaly_score > 0.4:
         return "Bot"
-    if anomaly_score > 0.65 and tot_pkts >= 15:
+    # Only call it Bot for high anomaly score + enough packets, and avoid auto-labeling moderate HTTPS flows.
+    if anomaly_score > 0.75 and tot_pkts >= 15 and dst_port not in (80, 443):
         return "Bot"
 
-    # ─── Infiltration: non-common port, meaningful activity ───
+    # ─── Infiltration: non-common ports on both sides, meaningful activity (avoid flagging normal HTTPS) ───
     common_ports = (21, 22, 23, 80, 443, 3389, 445)
-    if dst_port not in common_ports and dst_port > 0:
-        if tot_pkts >= 4 and total_bytes > 500:
+    src_is_common = src_port in common_ports
+    dst_is_common = dst_port in common_ports
+    if (not src_is_common) and (not dst_is_common) and src_port > 0 and dst_port > 0:
+        if tot_pkts >= 4 and total_bytes > 500 and anomaly_score > 0.55:
             return "Infiltration"
 
-    # ─── Score-based fallback: prefer DDoS/Bot over generic Anomaly ───
+    # ─── Score-based fallback: prefer DDoS/Bot over generic Anomaly (with HTTPS safety guard) ───
     if anomaly_score > ANOMALY_LABEL_THRESHOLDS["DDoS"]:
         return "DDoS"
     if anomaly_score > ANOMALY_LABEL_THRESHOLDS["Bot"]:
-        return "Bot"
-    if anomaly_score > 0.45:
-        return "Bot"
+        # For high anomaly scores, allow Bot as a generic label, but avoid common web ports
+        # unless the anomaly is extreme (to limit false positives on normal HTTPS traffic).
+        if dst_port not in (80, 443) or anomaly_score > 0.9:
+            return "Bot"
     if tot_pkts <= 8 and tot_pkts >= 1:
         return "PortScan"
     return "Anomaly"

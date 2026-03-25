@@ -133,10 +133,12 @@ export default function TrafficAnalysis() {
         const raw = String(p?.hour || '').trim();
         if (!raw) return '';
 
-        let dt = new Date(raw);
-        if (Number.isNaN(dt.getTime())) dt = new Date(raw.replace(' ', 'T'));
-        if (Number.isNaN(dt.getTime()) && raw.length === 13) dt = new Date(`${raw}:00:00`);
-        if (Number.isNaN(dt.getTime()) && raw.length === 16) dt = new Date(`${raw}:00`);
+        // Backend stores UTC timestamps; hour buckets are substr(timestamp,1,16) e.g. "2026-03-18T10:01"
+        // Append Z so Date() interprets as UTC, then toLocaleString converts to local
+        let normalized = raw.replace(' ', 'T');
+        if (!normalized.endsWith('Z')) normalized += ':00Z';
+        let dt = new Date(normalized);
+        if (Number.isNaN(dt.getTime())) dt = new Date(raw);
         if (Number.isNaN(dt.getTime())) return raw;
 
         return dt.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });

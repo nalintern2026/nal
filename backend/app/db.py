@@ -5,7 +5,7 @@ Uses SQLite for persistent storage with pagination support.
 import sqlite3
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 import threading
 
@@ -138,7 +138,7 @@ def insert_analysis(
     with db_lock:
         conn = sqlite3.connect(str(DB_PATH))
         cursor = conn.cursor()
-        uploaded_at = datetime.utcnow().isoformat() + "Z"
+        uploaded_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
         cursor.execute("""
             INSERT OR REPLACE INTO analysis_history (
                 analysis_id, filename, monitor_type, uploaded_at, file_size,
@@ -287,7 +287,7 @@ def get_analysis_report(analysis_id: str) -> Optional[Dict[str, Any]]:
                     "analysis_id": aid,
                     "filename": filename,
                     "monitor_type": "Static Monitoring",
-                    "uploaded_at": (fn_row and fn_row["ts"]) or datetime.utcnow().isoformat() + "Z",
+                    "uploaded_at": (fn_row and fn_row["ts"]) or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z',
                     "file_size": None,
                     "total_flows": flow_row["cnt"],
                     "anomaly_count": 0,
@@ -551,17 +551,18 @@ def get_dashboard_stats(monitor_type: Optional[str] = None) -> Dict[str, Any]:
         risk_dist.update(risk_dist_db)
 
         # Get timeline (last 1 hour, grouped by minute)
-        timeline_where = "WHERE timestamp > datetime('now', '-1 hour')"
+        # Must use datetime() to normalize ISO 'T' separator vs SQLite space separator
+        timeline_where = "WHERE datetime(timestamp) > datetime('now', '-1 hour')"
         if where_monitor.strip():
             timeline_where += " AND " + where_monitor.replace("WHERE", "").strip()
         cursor.execute("""
             SELECT 
-                strftime('%H:%M', timestamp) as hour,
+                substr(timestamp, 1, 16) as hour,
                 COUNT(*) as total,
                 SUM(CASE WHEN is_anomaly THEN 1 ELSE 0 END) as anomalies
             FROM flows
             """ + timeline_where + """
-            GROUP BY strftime('%H:%M', timestamp)
+            GROUP BY substr(timestamp, 1, 16)
             ORDER BY hour
         """, params)
         timeline = [dict(row) for row in cursor.fetchall()]
