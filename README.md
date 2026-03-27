@@ -57,3 +57,4 @@ npm run dev -- --host
 - `docs/11_api.md`
 - `docs/12_troubleshooting.md`
 - `docs/13_dev_notes.md`
+- `docs/14_live_monitoring.md`

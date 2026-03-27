@@ -1,69 +1,112 @@
-# ML Model Details
+# ML Model Details (Actual Project Behavior)
 
-## Model Types in Use
+## 1) Models Used in Runtime
 
-- **Supervised model:** `RandomForestClassifier` (`n_estimators=100`).
-- **Unsupervised model:** `IsolationForest` (`n_estimators=100`, `contamination=0.01`).
+- **Supervised classifier:** `RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)`
+- **Unsupervised detector:** `IsolationForest(n_estimators=100, contamination=0.01, random_state=42, n_jobs=-1)`
+- **Preprocessing:** `StandardScaler`
+- **Label mapping:** `LabelEncoder` (for supervised class name decode)
 
-## Feature Set
+All are loaded by `DecisionEngine` from `training_pipeline/models`.
 
-- Training pipeline uses numeric CIC-flow-derived features.
-- Persisted feature schema is stored in `training_pipeline/models/artifacts/feature_names.pkl`.
-- Current training metadata reports `feature_count: 79` in `metrics.json`.
+## 2) Artifacts and Paths
 
-## Training Process
+- `training_pipeline/models/supervised/rf_model.pkl`
+- `training_pipeline/models/unsupervised/if_model.pkl`
+- `training_pipeline/models/artifacts/scaler.pkl`
+- `training_pipeline/models/artifacts/label_encoder.pkl`
+- `training_pipeline/models/artifacts/feature_names.pkl`
+- `training_pipeline/models/metrics.json`
 
-Defined in `nal/training_pipeline/train.py`:
+If any supervised artifacts are missing, the system remains operational with anomaly-only behavior.
 
-1. Recursively load CSVs from processed flow directories.
-2. Clean data (`clean_data`) by removing NaN/Inf rows.
-3. Drop non-predictive ID/time/address fields.
-4. Fit scaler and label encoder.
-5. Split data (80/20, stratified if labels exist).
-6. Train RF on labeled split.
-7. Train IF primarily on BENIGN class (if available), else on all training rows.
-8. Save model and preprocessing artifacts.
+## 3) Feature Set and Input Shape
 
-## Inference Logic
+- Feature space is CIC-style numeric flow features.
+- `feature_names.pkl` is treated as source of truth.
+- During inference, missing columns are auto-created as zeros before scaling.
+- Current training metadata in repo indicates **79 features**.
 
-Implemented in `decision_service.py`:
+## 4) Training Pipeline (How models are produced)
 
-- Standardized feature alignment -> scaling -> RF + IF inference.
-- IF score transformation: `anomaly_score = clip(0.5 - decision_function(), 0, 1)`.
-- If RF predicts BENIGN but IF marks anomaly, rule-based threat inference is applied.
+From `training_pipeline/train.py` + `core/feature_engineering.py`:
 
-## Risk Scoring
+1. Collect all CSV files recursively from processed flow directories.
+2. Clean rows (`replace inf`, `dropna`, normalize column names).
+3. Drop non-predictive columns (IPs, ports, timestamps, IDs, etc.).
+4. Separate label `Label` if present.
+5. Select numeric columns and fit scaler.
+6. Fit label encoder (if labels present).
+7. Save scaler/encoder/feature names artifacts.
+8. Split train/test (`80/20`, stratified when labels exist).
+9. Train Random Forest and compute classification report.
+10. Train Isolation Forest using BENIGN-only training rows when possible.
+11. Persist models and metrics.
 
-- BENIGN + anomaly: `risk = anomaly_score * 0.6`
-- Threat from supervised path: `risk = 0.7 * confidence + 0.3 * anomaly_score`
-- Threat when supervised artifacts absent: pseudo-confidence formula + anomaly contribution + offset.
+## 5) Prediction Logic (Upload and Realtime)
 
-Risk levels:
+Both passive uploads and realtime monitoring use the same ML decision policy:
 
-- `Critical` if `risk > 0.8`
-- `High` if `risk > 0.6`
-- `Medium` if `risk > 0.3`
-- else `Low`
+1. Input feature vector is aligned to feature names.
+2. Scaler transforms features.
+3. RF predicts class + probabilities (if available).
+4. IF predicts anomaly flag and decision function.
+5. Decision function converted to score:
+   - `anomaly_score = clip(0.5 - decision_function, 0, 1)`
+6. If IF says anomaly and RF label is `BENIGN`, unsupervised threat inference overrides label using flow behavior.
+7. Risk score and risk level are computed.
+8. Threat type, CVE refs, and textual reason are generated.
 
-## Threat Label Inference (Unsupervised Override)
+## 6) Thresholds and Risk Levels
 
-When anomaly is detected on BENIGN prediction, `infer_anomaly_threat_type` uses behavior patterns:
+### Risk-level thresholds (`classification_config.py`)
 
-- packet/rate bursts -> DDoS/Bot,
-- probe-like sparse packets -> PortScan,
-- service-port attack patterns -> Brute Force,
-- web-port payload patterns -> Web Attack,
-- special TLS shape -> Heartbleed,
-- uncommon-port movement patterns -> Infiltration.
+- `Critical`: `risk > 0.8`
+- `High`: `risk > 0.6`
+- `Medium`: `risk > 0.3`
+- `Low`: otherwise
 
-## Current Metrics State
+### Risk score formulas
 
-- `training_pipeline/models/metrics.json` exists but currently contains empty `models` object in this repository snapshot.
-- Backend falls back to runtime-only metrics for dashboard reporting if detailed model metrics are unavailable.
+- **Benign and anomalous:** `risk = anomaly_score * 0.6`
+- **Threat from supervised path:** `risk = (confidence * 0.7) + (anomaly_score * 0.3)`
+- **Threat when supervised unavailable:** `risk = (pseudo_conf * 0.6) + (anomaly_score * 0.4) + 0.15`
 
-## Limitations
+## 7) Unsupervised Threat-Type Inference Rules
 
-- Performance tracking is only as good as available `metrics.json`; current file lacks model metric blocks.
-- Training quality depends on dataset curation and label consistency.
-- Rule-based unsupervised label inference is heuristic and may over/under-classify in edge traffic patterns.
-- Model reload behavior is startup-driven; retraining typically requires backend restart for deterministic artifact refresh.
+Used when anomaly exists but supervised says BENIGN:
+
+- `PortScan`: very low packet count + probe-like flags/timing.
+- `Brute Force`: common auth/service ports (`21,22,23,3389,445`) + TCP profile.
+- `DDoS`: very high packet/byte rates or high-volume short-duration bursts.
+- `Web Attack`: traffic around web ports (`80/443`) with meaningful payload.
+- `Heartbleed`: specific 443 + packet pattern heuristics.
+- `Bot`: high-rate/UDP-heavy patterns (with guardrails around common web ports).
+- `Infiltration`: unusual source/destination port pair + suspicious activity shape.
+- Fallback to score-based `DDoS`/`Bot`/`Anomaly`.
+
+## 8) What the Model Output Looks Like Per Flow
+
+Each flow inserted in DB contains:
+
+- `classification`
+- `threat_type`
+- `cve_refs`
+- `classification_reason`
+- `confidence`
+- `anomaly_score`
+- `risk_score`
+- `risk_level`
+- `is_anomaly`
+
+## 9) Current Repo Metrics Status
+
+- Current `training_pipeline/models/metrics.json` has `training_info` but empty `models`.
+- Backend API falls back to runtime flow-derived metrics when model-metric blocks are missing.
+
+## 10) Practical Limitations
+
+- Heuristic threat override can mislabel edge cases in unknown traffic profiles.
+- Model quality is highly dependent on label quality and dataset drift.
+- If scaler/features mismatch with incoming schema, predictions degrade.
+- After retraining, backend restart is recommended for deterministic artifact reload.
