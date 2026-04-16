@@ -30,17 +30,13 @@ npm install
 
 ## Environment Variables
 
-### Backend / n8n-related examples
+### Backend examples
 
 Use `nal/.env.example` as baseline:
 
-- `ALERT_WEBHOOK_URL`
-- `ANOMALY_RATE_THRESHOLD`
-- `RISK_SCORE_THRESHOLD`
-- `CRITICAL_COUNT_THRESHOLD`
-- `NETGUARD_AUTO_RESTART`
-- `NETGUARD_EXPECT_RUNNING`
-- `NETGUARD_DEFAULT_INTERFACE`
+- `NETGUARD_API_KEY`
+- `CORS_ALLOWED_ORIGINS`
+- `NETGUARD_DATA_DIR` (optional)
 
 ### Frontend
 
@@ -49,7 +45,6 @@ Use `nal/.env.example` as baseline:
 ## External Services
 
 - OSV API is queried by SBOM scanner (internet access required for vulnerability enrichment).
-- Slack/webhook endpoint is required for n8n alert/report delivery.
 
 ## Docker-Based Setup (Optional)
 
@@ -63,7 +58,6 @@ Exposed services:
 
 - Backend: `8000`
 - Frontend: `5173`
-- n8n: `5678`
 
 ## Data/Model Preparation
 

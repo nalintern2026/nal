@@ -1,6 +1,6 @@
 # NetGuard Network Security Intelligence
 
-NetGuard is a full-stack network traffic security analysis platform in this repository under `nal/`. It combines FastAPI services, machine-learning inference, realtime packet monitoring, a React dashboard, and n8n automation workflows to classify traffic, detect anomalies, score risk, and generate operational alerts/reports.
+NetGuard is a full-stack network traffic security analysis platform in this repository under `nal/`. It combines FastAPI services, machine-learning inference, realtime packet monitoring, and a React dashboard to classify traffic, detect anomalies, score risk, and generate operational reports.
 
 ## Key Features
 
@@ -9,7 +9,7 @@ NetGuard is a full-stack network traffic security analysis platform in this repo
 - Active live-monitoring pipeline using Scapy capture windows.
 - Risk scoring, threat labeling, CVE-context mapping, and analysis history.
 - SBOM dependency scanning with OSV vulnerability enrichment.
-- n8n workflows for monitoring, alerting, training checks, and daily reporting.
+- Integrity endpoints for model/runtime/database validation.
 
 ## Minimal Setup
 
@@ -43,6 +43,11 @@ npm run dev -- --host
 ## Documentation
 
 👉 Full documentation available in `/docs`
+
+## Security Baseline
+
+- Protected API routes require `x-api-key` header matching `NETGUARD_API_KEY`.
+- Public diagnostic routes: `/api/health`, `/api/model/integrity`, `/api/integrity`.
 
 - `docs/01_overview.md`
 - `docs/02_architecture.md`

@@ -13,22 +13,18 @@
 - Most operational use is local/lab scale with single-node deployment.
 - Training data follows CIC-like schema expected by feature alignment logic.
 - Live capture permissions are handled by process elevation when needed.
-- Webhook destination management is delegated to n8n workflow configuration.
 
 ## Trade-offs
 
 - **Pros:** low setup complexity, quick iteration, understandable end-to-end flow.
 - **Cons:** SQLite concurrency/scaling limits for larger multi-user deployments.
-- **Pros:** unsupervised fallback keeps system functional without full supervised artifacts.
-- **Cons:** fallback can reduce classification fidelity and produce generic labels.
-- **Pros:** n8n adds rapid automation.
-- **Cons:** workflow JSON currently uses hardcoded endpoints/placeholders that require manual hardening.
+- **Pros:** fail-fast model integrity prevents silent incorrect classifications.
+- **Cons:** strict schema checks require model/artifact discipline.
 
 ## Notable Gaps / Risks
 
 - `training_pipeline/models/metrics.json` currently lacks populated model metric blocks (`models: {}`).
-- `setup_project.py` references a path/config module tree not present in this repository state (legacy/unused script risk).
-- n8n workflow field expectations may drift from current backend response keys if APIs evolve.
+- External automation expectations may drift from backend response keys if APIs evolve.
 - Root-level `flows.db` can grow significantly without retention management unless cleanup routines are scheduled.
 - Root-level `passive_timeline.db` is append-oriented for passive uploads and should be monitored if retention policy is introduced.
 
@@ -36,6 +32,6 @@
 
 - Add automated integration tests for critical API paths and workflow contracts.
 - Add schema versioning and migration scripts for DB changes.
-- Externalize n8n URLs/thresholds fully to environment variables in all workflow nodes.
-- Introduce role-based auth and scoped API access for production contexts.
+- Keep integration configs (webhooks/thresholds) externalized in deployment environment.
+- Keep `NETGUARD_API_KEY` rotated and managed through deployment secrets.
 - Add model drift tracking and artifact version tagging in metrics payload.

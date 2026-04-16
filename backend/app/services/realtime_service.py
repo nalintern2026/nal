@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+from app.utils.logger import get_logger
+logger = get_logger(__name__)
+from app.services.queue_service import enqueue_flow_batch
 
 # Max packets per capture window to avoid memory exhaustion
 MAX_PACKETS_PER_WINDOW = 50000
@@ -336,6 +339,10 @@ class RealtimeMonitor:
         self._session_total_flows = 0
         self._session_anomaly_count = 0
         self._session_risk_sum = 0.0
+        self.state = "STOPPED"
+        self.last_error: Optional[str] = None
+        self.packets_processed = 0
+        self.flows_processed = 0
 
     def start(self, interface: str) -> None:
         """Start monitoring in background thread."""
@@ -343,6 +350,8 @@ class RealtimeMonitor:
             if self.running:
                 return
             self.running = True
+            self.state = "RUNNING"
+            self.last_error = None
             self.interface = interface or None
             self._session_id = f"active-{uuid.uuid4().hex[:8]}"
             self._session_start = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
@@ -362,6 +371,7 @@ class RealtimeMonitor:
         session_id = None
         with self._lock:
             self.running = False
+            self.state = "STOPPED"
             session_id = self._session_id
         if session_id and self._session_total_flows > 0:
             try:
@@ -391,6 +401,7 @@ class RealtimeMonitor:
                 packets = capture_packets(interface, duration=5)
                 if not packets:
                     continue
+                self.packets_processed += len(packets)
 
                 flows_raw = build_flows_from_packets(packets)
                 if not flows_raw:
@@ -413,7 +424,8 @@ class RealtimeMonitor:
                     f["id"] = str(uuid.uuid4())[:8]
                     f["timestamp"] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
 
-                db.insert_flows(enriched, monitor_type="active")
+                enqueue_flow_batch(enriched, monitor_type="active")
+                self.flows_processed += len(enriched)
 
                 self._session_total_flows += len(enriched)
                 self._session_anomaly_count += sum(1 for f in enriched if f.get("is_anomaly"))
@@ -423,16 +435,22 @@ class RealtimeMonitor:
 
             except Exception as e:
                 logger.error(f"Realtime monitor loop error: {e}", exc_info=True)
-                # Continue to next iteration
+                self.state = "FAILED"
+                self.last_error = str(e)
+                self.running = False
 
     def get_status(self) -> Dict[str, Any]:
         with self._lock:
             return {
                 "running": self.running,
+                "state": self.state,
                 "interface": self.interface if self.interface else "lo (default)",
                 "capture_count": self._capture_count,
                 "last_flow_count": self._last_flow_count,
                 "capture_error": _last_capture_error,
+                "last_error": self.last_error,
+                "packets_processed": self.packets_processed,
+                "flows_processed": self.flows_processed,
             }
 
 

@@ -27,6 +27,7 @@ const navItems = [
     { path: '/osint', label: 'OSINT Validation', icon: ShieldCheck },
     { path: '/models', label: 'Model Performance', icon: BarChart3 },
     { path: '/security', label: 'SBOM Security', icon: Shield },
+    { path: '/alerts', label: 'Alerts', icon: AlertTriangle },
 ];
 
 export default function Layout({ children }) {

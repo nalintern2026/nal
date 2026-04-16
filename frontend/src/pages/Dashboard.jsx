@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getDashboardStats } from '../services/api';
+import { getDashboardStats, getAlerts } from '../services/api';
 import { SectionHeading, TogglePills } from '../components/Primitives';
 import {
     Activity,
@@ -66,6 +66,8 @@ export default function Dashboard() {
     const [refreshing, setRefreshing] = useState(false);
     const [lastFetchByMode, setLastFetchByMode] = useState({ passive: null, active: null });
     const [monitorView, setMonitorView] = useState('passive'); // 'passive' | 'active'
+    const [alertSummary, setAlertSummary] = useState({ total: 0, critical: 0 });
+    const [activeModel] = useState('—');
 
     const genPassive = useRef(0);
     const genActive = useRef(0);
@@ -91,6 +93,13 @@ export default function Dashboard() {
         let cancelled = false;
         (async () => {
             await Promise.all([fetchStatsFor('passive'), fetchStatsFor('active')]);
+            try {
+                const alertsRes = await getAlerts({ limit: 200 });
+                const alerts = alertsRes.data.alerts || [];
+                setAlertSummary({ total: alerts.length, critical: alerts.filter((a) => a.priority === 'CRITICAL').length });
+            } catch {
+                setAlertSummary({ total: 0, critical: 0 });
+            }
             if (!cancelled) setLoading(false);
         })();
         return () => { cancelled = true; };
@@ -220,6 +229,10 @@ export default function Dashboard() {
                     trend="Live"
                     trendUp={true}
                 />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="glass-card p-4">Alerts: <span className="font-semibold">{alertSummary.total}</span> (Critical: {alertSummary.critical})</div>
+                <div className="glass-card p-4">Active Model Version: <span className="font-semibold">{activeModel}</span></div>
             </div>
 
             {/* Charts Row */}

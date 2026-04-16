@@ -37,6 +37,16 @@ function parseCveRefs(raw) {
     return String(raw).split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+function parseExplanation(raw) {
+    if (!raw) return null;
+    if (typeof raw === 'object') return raw;
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return null;
+    }
+}
+
 export default function OSINTValidation() {
     const [flows, setFlows] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -229,6 +239,7 @@ export default function OSINTValidation() {
                             const cves = parseCveRefs(f.cve_refs);
                             const vc = verdictColors[f.final_verdict] || verdictColors['OSINT Unavailable'];
                             const rc = riskColors[f.risk_level] || 'text-text-muted';
+                            const exp = parseExplanation(f.explanation);
                             return (
                                 <div key={`detail-${f.id}`} className="mx-4 mb-4 p-5 rounded-xl bg-background/60 border border-white/10 animate-fade-in space-y-4">
                                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -372,6 +383,15 @@ export default function OSINTValidation() {
                                                     <span className="text-small font-mono text-text-primary">{f.flow_packets_per_sec != null ? Number(f.flow_packets_per_sec).toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</span>
                                                 </div>
                                             </div>
+                                            {exp && (
+                                                <div className="pt-2 border-t border-white/10 space-y-1.5">
+                                                    <p className="text-small text-text-muted font-medium">Decision Explainability</p>
+                                                    <p className="text-small text-text-primary">ML: {exp.ml_score ?? 0} | OSINT: {exp.osint_score ?? 0} | Feed: {exp.feed_score ?? 0} | Final: {exp.final_score ?? 0}</p>
+                                                    <ul className="text-small text-text-muted list-disc pl-4">
+                                                        {(exp.explanation || []).map((line) => <li key={line}>{line}</li>)}
+                                                    </ul>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>

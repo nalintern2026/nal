@@ -20,7 +20,7 @@ import ipaddress
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
-from core.feature_engineering import clean_data, preprocess_data
+from core.feature_engineering import clean_data
 from app.classification_config import (
     risk_level_from_score,
     infer_anomaly_threat_type,
@@ -28,19 +28,18 @@ from app.classification_config import (
     build_classification_reason,
 )
 from app.services.osint import run_osint_checks, compute_final_score, osint_verdict_from_final_score
+from app import db, config
+from app.paths import (
+    SUPERVISED_MODEL_PATH,
+    UNSUPERVISED_MODEL_PATH,
+    SCALER_PATH,
+    LABEL_ENCODER_PATH,
+    FEATURE_NAMES_PATH,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-# Model Paths
-MODELS_DIR = PROJECT_ROOT / "training_pipeline" / "models"
-SUPERVISED_MODEL_PATH = MODELS_DIR / "supervised" / "rf_model.pkl"
-UNSUPERVISED_MODEL_PATH = MODELS_DIR / "unsupervised" / "if_model.pkl"
-ARTIFACTS_DIR = MODELS_DIR / "artifacts"
-SCALER_PATH = ARTIFACTS_DIR / "scaler.pkl"
-LABEL_ENCODER_PATH = ARTIFACTS_DIR / "label_encoder.pkl"
-FEATURE_NAMES_PATH = ARTIFACTS_DIR / "feature_names.pkl"
 
 # Temp Dir for PCAP processing
 TEMP_DIR = PROJECT_ROOT / "temp_processing"
@@ -104,6 +103,33 @@ class DecisionEngine:
         self._supervised_fallback_logged = False
         self._load_models()
 
+    @property
+    def models_ready(self) -> bool:
+        feature_ready = self.feature_names is not None and len(self.feature_names) > 0
+        return bool(self.rf_model and self.if_model and self.scaler and self.label_encoder and feature_ready)
+
+    def _validate_features(self, df_clean: pd.DataFrame) -> pd.DataFrame:
+        if self.feature_names is None:
+            raise RuntimeError("MODEL_UNAVAILABLE: feature names artifact missing")
+        missing = [f for f in self.feature_names if f not in df_clean.columns]
+        if missing:
+            raise RuntimeError(
+                f"UNKNOWN: input schema mismatch; missing required features: {missing[:15]}"
+            )
+        return df_clean[self.feature_names]
+
+    def _alert_priority(self, row: dict) -> str:
+        risk = float(row.get("risk_score") or 0.0)
+        final = float(row.get("final_score") or 0.0)
+        feed = float(row.get("feed_score") or 0.0)
+        if row.get("risk_level") == "Critical" or final >= 85 or feed >= 80:
+            return "CRITICAL"
+        if row.get("risk_level") == "High" or final >= 70 or feed >= 50:
+            return "HIGH"
+        if risk >= 0.4 or final >= 50:
+            return "MEDIUM"
+        return "LOW"
+
     def _load_models(self):
         """Load trained models and artifacts from disk."""
         logger.info("Loading models...")
@@ -154,12 +180,8 @@ class DecisionEngine:
         except Exception as e:
             logger.error(f"Error loading artifacts: {e}")
 
-        if not self.rf_model or not self.label_encoder:
-            # This is an expected state for anomaly-only mode; keep it informational.
-            logger.info(
-                "Supervised pipeline inactive (rf_model or label_encoder missing). "
-                "System will run unsupervised anomaly detection only."
-            )
+        if not self.models_ready:
+            logger.warning("Model pipeline not fully ready. Inference requests will fail fast.")
 
 
     def analyze_file(
@@ -257,43 +279,18 @@ class DecisionEngine:
 
                 has_rows = True
 
-                if self.feature_names is not None:
-                    for col in self.feature_names:
-                        if col not in df_clean.columns:
-                            df_clean[col] = 0
-                    df_features = df_clean[self.feature_names]
-                else:
-                    df_features = df_clean.select_dtypes(include=[np.number])
-
-                if self.scaler:
-                    X_scaled = self.scaler.transform(df_features)
-                else:
-                    logger.warning("Scaler not loaded! Skipping scaling (Predictions will be wrong).")
-                    X_scaled = df_features.values
-
-                if self.rf_model and self.label_encoder:
-                    y_pred = self.rf_model.predict(X_scaled)
-                    y_prob = self.rf_model.predict_proba(X_scaled)
-                    confidences = np.max(y_prob, axis=1)
-                    labels = self.label_encoder.inverse_transform(y_pred)
-                else:
-                    labels = ["BENIGN"] * len(df_clean)
-                    confidences = [0.5] * len(df_clean)
-                    if not self._supervised_fallback_logged:
-                        logger.warning(
-                            "No supervised model available for inference. "
-                            "Using BENIGN fallback labels with anomaly-based risk scoring."
-                        )
-                        self._supervised_fallback_logged = True
-
-                if self.if_model:
-                    anomaly_scores_raw = self.if_model.decision_function(X_scaled)
-                    anomaly_scores = 0.5 - anomaly_scores_raw
-                    anomaly_scores = np.clip(anomaly_scores, 0, 1)
-                    is_anomaly = self.if_model.predict(X_scaled) == -1
-                else:
-                    anomaly_scores = [0.0] * len(df_clean)
-                    is_anomaly = [False] * len(df_clean)
+                if not self.models_ready:
+                    raise RuntimeError("MODEL_UNAVAILABLE: model artifacts are missing or incompatible")
+                df_features = self._validate_features(df_clean)
+                X_scaled = self.scaler.transform(df_features)
+                y_pred = self.rf_model.predict(X_scaled)
+                y_prob = self.rf_model.predict_proba(X_scaled)
+                confidences = np.max(y_prob, axis=1)
+                labels = self.label_encoder.inverse_transform(y_pred)
+                anomaly_scores_raw = self.if_model.decision_function(X_scaled)
+                anomaly_scores = 0.5 - anomaly_scores_raw
+                anomaly_scores = np.clip(anomaly_scores, 0, 1)
+                is_anomaly = self.if_model.predict(X_scaled) == -1
 
                 chunk_rows = []
                 for i in range(len(df_clean)):
@@ -335,11 +332,7 @@ class DecisionEngine:
                     if lbl == 'BENIGN':
                         risk = anom_score * 0.6 if is_anom else 0.0
                     else:
-                        if self.rf_model and self.label_encoder:
-                            risk = (conf * 0.7) + (anom_score * 0.3)
-                        else:
-                            pseudo_conf = max(conf, min(1.0, 0.55 + (0.45 * anom_score)))
-                            risk = (pseudo_conf * 0.6) + (anom_score * 0.4) + 0.15
+                        risk = (conf * 0.7) + (anom_score * 0.3)
 
                     risk = float(np.clip(risk, 0, 1))
                     risk_level = risk_level_from_score(risk)
@@ -409,6 +402,7 @@ class DecisionEngine:
                         "risk_score": risk,
                         "risk_level": risk_level,
                         "is_anomaly": is_anom,
+                        "model_version": db.get_active_model_version(),
                     }
 
                     # ── OSINT validation (only when anomaly detector flags a flow) ──
@@ -444,6 +438,13 @@ class DecisionEngine:
                                 )
                                 row["final_score"] = final_score
                                 row["final_verdict"] = osint_verdict_from_final_score(final_score, osint_has_data)
+                            row["explanation"] = {
+                                "ml_score": round(ml_confidence, 2),
+                                "osint_score": round(float((osint.abuse_score or 0) + (osint.vt_score or 0)) / 2.0, 2),
+                                "feed_score": round(float(osint.feed_score or 0), 2),
+                                "final_score": round(float(row.get("final_score") or 0), 2),
+                                "explanation": (osint.explanation or []) + ["Isolation Forest anomaly detected"],
+                            }
                             if row.get("final_verdict"):
                                 logger.info(
                                     "OSINT verdict: ip=%s ml_anom=%.3f rf_conf=%.3f abuse=%s vt=%s feeds=%.0f final=%.1f verdict=%s",
@@ -467,7 +468,20 @@ class DecisionEngine:
                             row["osint_error"] = "no public ip (skipped)"
                             row["final_score"] = None
                             row["final_verdict"] = "OSINT Skipped"
+                            row["explanation"] = {
+                                "ml_score": round(ml_confidence, 2),
+                                "osint_score": 0.0,
+                                "feed_score": 0.0,
+                                "final_score": 0.0,
+                                "explanation": ["Isolation Forest anomaly detected", "No public IP available for OSINT"],
+                            }
                     chunk_rows.append(row)
+                    if row.get("risk_level") in ("High", "Critical") or float(row.get("final_score") or 0.0) > float(config.ALERT_FINAL_SCORE_THRESHOLD):
+                        db.create_alert(
+                            row,
+                            reason=row.get("classification_reason") or "Risk threshold exceeded",
+                            priority=self._alert_priority(row),
+                        )
 
                     total_flows += 1
                     anomaly_count += 1 if is_anom else 0
@@ -561,7 +575,8 @@ class DecisionEngine:
             
         except Exception as e:
             logger.error(f"Analysis failed: {e}", exc_info=True)
-            return {"error": str(e)}
+            state = "MODEL_UNAVAILABLE" if "MODEL_UNAVAILABLE" in str(e) else "UNKNOWN"
+            return {"error": str(e), "state": state}
         finally:
             if should_cleanup_csv and os.path.exists(csv_path):
                 os.remove(csv_path)
@@ -576,6 +591,8 @@ class DecisionEngine:
         """
         if not flows_raw:
             return []
+        if not self.models_ready:
+            raise RuntimeError("MODEL_UNAVAILABLE: model artifacts are missing or incompatible")
 
         def _safe_int(v):
             if v is None or (isinstance(v, float) and np.isnan(v)):
@@ -692,41 +709,16 @@ class DecisionEngine:
         if df.empty:
             return []
 
-        # Fill missing feature columns with 0
-        if self.feature_names is not None and len(self.feature_names) > 0:
-            for col in self.feature_names:
-                if col not in df.columns:
-                    df[col] = 0
-            df_features = df[self.feature_names]
-        else:
-            df_features = df.select_dtypes(include=[np.number])
-            for col in df_features.columns:
-                if col not in df.columns:
-                    df[col] = 0
-            df_features = df.select_dtypes(include=[np.number])
-
-        if self.scaler:
-            X_scaled = self.scaler.transform(df_features)
-        else:
-            X_scaled = df_features.values
-
-        if self.rf_model and self.label_encoder:
-            y_pred = self.rf_model.predict(X_scaled)
-            y_prob = self.rf_model.predict_proba(X_scaled)
-            confidences = np.max(y_prob, axis=1)
-            labels = self.label_encoder.inverse_transform(y_pred)
-        else:
-            labels = ["BENIGN"] * len(df)
-            confidences = [0.5] * len(df)
-
-        if self.if_model:
-            anomaly_scores_raw = self.if_model.decision_function(X_scaled)
-            anomaly_scores = 0.5 - anomaly_scores_raw
-            anomaly_scores = np.clip(anomaly_scores, 0, 1)
-            is_anomaly = self.if_model.predict(X_scaled) == -1
-        else:
-            anomaly_scores = np.zeros(len(df))
-            is_anomaly = np.array([False] * len(df))
+        df_features = self._validate_features(df)
+        X_scaled = self.scaler.transform(df_features)
+        y_pred = self.rf_model.predict(X_scaled)
+        y_prob = self.rf_model.predict_proba(X_scaled)
+        confidences = np.max(y_prob, axis=1)
+        labels = self.label_encoder.inverse_transform(y_pred)
+        anomaly_scores_raw = self.if_model.decision_function(X_scaled)
+        anomaly_scores = 0.5 - anomaly_scores_raw
+        anomaly_scores = np.clip(anomaly_scores, 0, 1)
+        is_anomaly = self.if_model.predict(X_scaled) == -1
 
         result = []
         for i in range(len(df)):
@@ -755,11 +747,7 @@ class DecisionEngine:
             if lbl == "BENIGN":
                 risk = anom_score * 0.6 if is_anom else 0.0
             else:
-                if self.rf_model and self.label_encoder:
-                    risk = (conf * 0.7) + (anom_score * 0.3)
-                else:
-                    pseudo_conf = max(conf, min(1.0, 0.55 + (0.45 * anom_score)))
-                    risk = (pseudo_conf * 0.6) + (anom_score * 0.4) + 0.15
+                risk = (conf * 0.7) + (anom_score * 0.3)
 
             risk = float(np.clip(risk, 0, 1))
             risk_level = risk_level_from_score(risk)
@@ -797,6 +785,7 @@ class DecisionEngine:
                 "risk_score": risk,
                 "risk_level": risk_level,
                 "is_anomaly": is_anom,
+                "model_version": db.get_active_model_version(),
             }
 
             # OSINT validation (only when anomaly detector flags a flow)
@@ -829,6 +818,13 @@ class DecisionEngine:
                     )
                     row["final_score"] = final_score
                     row["final_verdict"] = osint_verdict_from_final_score(final_score, osint_has_data)
+                    row["explanation"] = {
+                        "ml_score": round(ml_confidence, 2),
+                        "osint_score": round(float((osint.abuse_score or 0) + (osint.vt_score or 0)) / 2.0, 2),
+                        "feed_score": round(float(osint.feed_score or 0), 2),
+                        "final_score": round(float(row.get("final_score") or 0), 2),
+                        "explanation": (osint.explanation or []) + ["Isolation Forest anomaly detected"],
+                    }
                 else:
                     row["osint_ip"] = None
                     row["abuse_ok"] = False
@@ -840,8 +836,21 @@ class DecisionEngine:
                     row["osint_error"] = "no public ip (skipped)"
                     row["final_score"] = None
                     row["final_verdict"] = "OSINT Skipped"
+                    row["explanation"] = {
+                        "ml_score": round(ml_confidence, 2),
+                        "osint_score": 0.0,
+                        "feed_score": 0.0,
+                        "final_score": 0.0,
+                        "explanation": ["Isolation Forest anomaly detected", "No public IP available for OSINT"],
+                    }
 
             result.append(row)
+            if row.get("risk_level") in ("High", "Critical") or float(row.get("final_score") or 0.0) > float(config.ALERT_FINAL_SCORE_THRESHOLD):
+                db.create_alert(
+                    row,
+                    reason=row.get("classification_reason") or "Risk threshold exceeded",
+                    priority=self._alert_priority(row),
+                )
 
         return result
 

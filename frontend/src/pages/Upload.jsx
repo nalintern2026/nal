@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { uploadFile, getUploadFlows, setUploadInProgress } from '../services/api';
+import { uploadFile, getUploadJob, getUploadFlows, setUploadInProgress } from '../services/api';
 import { SectionHeading } from '../components/Primitives';
 import {
     Upload as UploadIcon,
@@ -13,8 +13,6 @@ import {
     ChevronDown,
     ChevronUp,
 } from 'lucide-react';
-/* eslint-disable react/prop-types */
-
 export default function Upload() {
     const [file, setFile] = useState(null);
     const [dragOver, setDragOver] = useState(false);
@@ -29,6 +27,7 @@ export default function Upload() {
     const [anomalyRowsVisible, setAnomalyRowsVisible] = useState(10);
     const [riskRowsVisible, setRiskRowsVisible] = useState(10);
     const [uploadFilter, setUploadFilter] = useState({ type: '', value: '' });
+    const [jobStatus, setJobStatus] = useState(null);
 
     const handleDrop = useCallback((e) => {
         e.preventDefault();
@@ -88,21 +87,49 @@ export default function Upload() {
         if (!file) return;
         setUploading(true);
         setError(null);
+        setJobStatus('QUEUED');
         setUploadInProgress(true);
 
         try {
             const { data } = await uploadFile(file);
-            setResult(data);
+            // Backward-compatible: some backend variants return completed analysis payload directly.
+            if (!data?.job_id && data?.id) {
+                setJobStatus('COMPLETED');
+                setResult(data || {});
+                setExpandedSection(null);
+                setFileFlows(data?.sample_flows || []);
+                setFlowsPage(1);
+                setHasMoreFlows((data?.total_flows || 0) > (data?.sample_flows || []).length);
+                setAnomalyRowsVisible(10);
+                setRiskRowsVisible(10);
+                setUploadFilter({ type: '', value: '' });
+                await loadMoreFlows(data?.id, 1, true);
+                return;
+            }
+            if (!data?.job_id) throw new Error('Backend response missing upload job id');
+            let job = null;
+            const start = Date.now();
+            while (Date.now() - start < 10 * 60 * 1000) {
+                const res = await getUploadJob(data.job_id);
+                job = res.data;
+                setJobStatus(job?.status || 'PROCESSING');
+                if (job?.status === 'COMPLETED' || job?.status === 'FAILED') break;
+                await new Promise((r) => setTimeout(r, 1500));
+            }
+            if (!job || job.status !== 'COMPLETED') {
+                throw new Error(job?.error || 'Upload processing timed out');
+            }
+            setResult(job.result_summary || {});
             setExpandedSection(null);
-            setFileFlows(data.sample_flows || []);
+            setFileFlows(job.result_summary?.sample_flows || []);
             setFlowsPage(1);
-            setHasMoreFlows((data.total_flows || 0) > (data.sample_flows || []).length);
+            setHasMoreFlows((job.result_summary?.total_flows || 0) > (job.result_summary?.sample_flows || []).length);
             setAnomalyRowsVisible(10);
             setRiskRowsVisible(10);
             setUploadFilter({ type: '', value: '' });
-            await loadMoreFlows(data.id, 1, true);
+            await loadMoreFlows(job.result_summary?.id, 1, true);
         } catch (err) {
-            setError(err.response?.data?.detail || 'Upload failed. Make sure the backend is running.');
+            setError(err?.friendlyMessage || err?.message || err.response?.data?.detail || 'Upload failed. Make sure the backend is running.');
         } finally {
             setUploading(false);
             setUploadInProgress(false);
@@ -321,6 +348,11 @@ export default function Upload() {
                         <XCircle size={20} className="text-danger" />
                         <p className="text-body text-red-300">{error}</p>
                     </div>
+                </div>
+            )}
+            {uploading && (
+                <div className="glass-card p-4 border-primary/30 bg-primary/10 animate-slide-up">
+                    <p className="text-body text-text-primary">Job status: <span className="font-semibold">{jobStatus || 'PROCESSING'}</span></p>
                 </div>
             )}
 

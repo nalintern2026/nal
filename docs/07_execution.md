@@ -5,7 +5,7 @@
 1. Train models (optional but recommended for supervised classification quality).
 2. Start backend API.
 3. Start frontend.
-4. (Optional) start n8n workflows.
+4. Verify integrity endpoints and UI.
 5. (Optional) enable active monitoring.
 
 ## 1) Train Models
@@ -68,7 +68,7 @@ flowchart TD
   K --> L[(SQLite flows.db)]
   L --> O[(passive_timeline.db)]
   L --> M[Dashboard and analytics APIs]
-  M --> N[React pages + n8n workflows]
+  M --> N[React pages]
 ```
 
 ## 4) Use Main Functional Paths
@@ -78,12 +78,10 @@ flowchart TD
 - Threat triage: `Anomalies`, `Traffic Analysis`, and `History` pages.
 - SBOM: upload dependency file in `SBOM Security` page.
 
-## 5) n8n Workflows
+## 5) Integrity Checks
 
-- Start n8n (`docker compose` service or standalone).
-- Import workflows from `nal/n8n/*.json`.
-- Configure webhook URLs and backend URL.
-- Activate selected workflows.
+- `GET /api/model/integrity`
+- `GET /api/integrity`
 
 ## 6) Active Monitoring Detailed Run Steps
 

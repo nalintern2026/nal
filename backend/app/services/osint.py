@@ -23,6 +23,7 @@ class OsintResult:
     vt_score: Optional[float] = None     # 0..100 (malicious ratio)
     feed_score: float = 0.0              # 0..100 from local threat feeds
     feed_sources: str = ""               # comma-separated feed names that matched
+    explanation: Optional[list[str]] = None
     error: Optional[str] = None
     raw: Optional[Dict[str, Any]] = None
 
@@ -220,10 +221,14 @@ def run_osint_checks(ip: str) -> OsintResult:
 
     if already_seen:
         # Already checked via API this session — only return feed data
+        explanation = ["OSINT APIs skipped due to session deduplication"]
+        if feed_result.score > 0:
+            explanation.append("Matched known threat feed")
         result = OsintResult(
             ip=ip,
             feed_score=feed_result.score,
             feed_sources=feed_result.sources,
+            explanation=explanation,
             error="already checked (session dedup)",
         )
         _cache_set(ip, result)
@@ -254,6 +259,13 @@ def run_osint_checks(ip: str) -> OsintResult:
     except Exception:
         raw["virustotal"] = None
 
+    explanation: list[str] = []
+    if abuse_ok and (abuse_score or 0) >= 60:
+        explanation.append("AbuseIPDB score > threshold")
+    if vt_ok and (vt_score or 0) >= 40:
+        explanation.append("VirusTotal malicious ratio elevated")
+    if feed_result.score > 0:
+        explanation.append("Matched known threat feed")
     result = OsintResult(
         ip=ip,
         abuse_ok=abuse_ok,
@@ -262,6 +274,7 @@ def run_osint_checks(ip: str) -> OsintResult:
         vt_score=vt_score,
         feed_score=feed_result.score,
         feed_sources=feed_result.sources,
+        explanation=explanation,
         error=error,
         raw=raw,
     )

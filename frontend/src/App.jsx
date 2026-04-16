@@ -10,6 +10,7 @@ import OSINTValidation from './pages/OSINTValidation';
 import ModelPerformance from './pages/ModelPerformance';
 import SBOMSecurity from './pages/SBOMSecurity';
 import ActiveMonitoring from './pages/ActiveMonitoring';
+import Alerts from './pages/Alerts';
 
 function App() {
   return (
@@ -26,6 +27,7 @@ function App() {
           <Route path="/models" element={<ModelPerformance />} />
           <Route path="/active" element={<ActiveMonitoring />} />
           <Route path="/security" element={<SBOMSecurity />} />
+          <Route path="/alerts" element={<Alerts />} />
         </Routes>
       </Layout>
     </Router>

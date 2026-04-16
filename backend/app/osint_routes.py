@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter
 
 from app import db
+from app.utils.response import success
 
 router = APIRouter(prefix="/api/osint", tags=["osint"])
 
@@ -27,11 +28,11 @@ async def get_osint_flows(
         src_ip=src_ip,
         monitor_type=monitor_type,
     )
-    return {
+    return success({
         "flows": flows,
         "total": total,
         "page": page,
         "per_page": per_page,
         "total_pages": (total + per_page - 1) // per_page,
-    }
+    })
 

@@ -2,6 +2,7 @@ import axios from 'axios';
 
 const RAW_API_URL = (import.meta.env.VITE_API_URL || '').trim();
 const API_BASE = RAW_API_URL || 'http://127.0.0.1:8000/api';
+const API_KEY = (import.meta.env.VITE_NETGUARD_API_KEY || '').trim();
 
 const api = axios.create({
     baseURL: API_BASE,
@@ -10,6 +11,30 @@ const api = axios.create({
         'Content-Type': 'application/json',
     },
 });
+
+api.interceptors.request.use((cfg) => {
+    const next = { ...cfg };
+    if (API_KEY) {
+        next.headers = { ...(next.headers || {}), 'x-api-key': API_KEY };
+    }
+    return next;
+});
+
+api.interceptors.response.use(
+    (response) => {
+        const payload = response?.data;
+        if (payload && typeof payload === 'object' && 'status' in payload && 'data' in payload) {
+            return { ...response, data: payload.data };
+        }
+        return response;
+    },
+    (error) => {
+        const wrappedErr = error?.response?.data?.error;
+        const detail = wrappedErr?.message || error?.response?.data?.detail || error?.message || 'Request failed';
+        error.friendlyMessage = detail;
+        return Promise.reject(error);
+    }
+);
 
 // Upload in progress – avoid marking "offline" while backend is busy processing large file
 let uploadInProgress = false;
@@ -57,6 +82,8 @@ export const uploadFile = (file) => {
         timeout: 0,
     });
 };
+export const getUploadJob = (jobId) => api.get(`/upload/jobs/${jobId}`);
+export const listUploadJobs = (limit = 50) => api.get('/upload/jobs', { params: { limit } });
 export const getUploadFlows = (analysisId, params = {}) => api.get(`/upload/${analysisId}/flows`, { params });
 
 // History (monitorType: '' | 'passive' | 'active')
@@ -86,5 +113,9 @@ export const startRealtimeMonitor = (iface = '') =>
 export const stopRealtimeMonitor = () => api.post('/realtime/stop');
 export const getRealtimeStatus = () => api.get('/realtime/status');
 export const getRealtimeInterfaces = () => api.get('/realtime/interfaces');
+export const getAlerts = (params = {}) => api.get('/alerts', { params });
+export const getAlert = (id) => api.get(`/alerts/${id}`);
+export const updateAlert = (id, status) => api.patch(`/alerts/${id}`, { status });
+export const getModelVersions = () => api.get('/model/versions');
 
 export default api;

@@ -8,7 +8,7 @@ The project is a multi-component security analytics stack:
 - `nal/core`: shared feature preprocessing functions used by training/inference.
 - `nal/training_pipeline`: artifact generation for Random Forest, Isolation Forest, scaler, and metadata.
 - `nal/frontend`: React/Vite dashboard consuming backend APIs.
-- `nal/n8n`: automation workflows for monitoring, alerting, reporting, and control.
+- Integrity and observability endpoints for runtime/system checks.
 - Root runtime storage: `flows.db` (flow/history) and `passive_timeline.db` (passive dashboard timeline) plus temporary upload/processing folders.
 
 ## Component Responsibilities
@@ -61,14 +61,9 @@ The project is a multi-component security analytics stack:
 - Routing in `App.jsx`; API client in `src/services/api.js`.
 - Pages for dashboard, upload, active monitoring, anomalies, history/reporting, traffic analysis, model metrics, and SBOM security.
 
-### 9) n8n Automation
-- JSON workflows in `nal/n8n`.
-- Automates:
-  - periodic health/risk checks,
-  - scheduled/on-demand file analysis,
-  - model/training status reporting,
-  - daily report generation,
-  - live-monitor control and health polling.
+### 9) Integrity and Observability
+- `GET /api/model/integrity` validates model artifact presence and compatibility.
+- `GET /api/integrity` runs import, DB, route, and model checks.
 
 ## Architecture Diagram
 
@@ -87,7 +82,7 @@ flowchart LR
   TF[Threat Feed Store] --> DB
   DB --> API[Query APIs]
   API --> FE[React Dashboard]
-  API --> N8N[n8n Workflows]
+  API --> OBS[Integrity endpoints]
   TP[Training Pipeline] --> ART[Model Artifacts]
   ART --> D
   SB[SBOM Upload] --> B
@@ -101,5 +96,4 @@ flowchart LR
 - Packet and flow handling: Scapy + CICFlowMeter.
 - Frontend: React 18, Vite, Axios, Chart.js, TailwindCSS.
 - SBOM/security: cyclonedx-python-lib, OSV API, dependency parser utilities.
-- Automation: n8n workflows and webhook/HTTP integrations.
-- Containerization: Docker + docker-compose for backend/frontend/n8n services.
+- Containerization: Docker + docker-compose for backend/frontend services.

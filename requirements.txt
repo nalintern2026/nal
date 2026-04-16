@@ -13,6 +13,7 @@ cyclonedx-bom==7.2.1
 cyclonedx-python-lib==11.6.0
 defusedxml==0.7.1
 fastapi==0.129.0
+httpx==0.28.1
 fqdn==1.5.1
 h11==0.16.0
 httptools==0.7.1
@@ -63,3 +64,5 @@ watchfiles==1.1.1
 webcolors==25.10.0
 websockets==16.0
 xgboost==3.2.0
+pytest==8.4.2
+redis==5.2.1

@@ -42,11 +42,11 @@
 - **Cause:** unsupported/irregular dependency file format or unpinned versions.
 - **Fix:** upload supported manifest with explicit versions.
 
-## 7) n8n Alerts Not Delivered
+## 7) External Alerts Not Delivered
 
-- **Symptoms:** workflow executes but no external notification.
-- **Cause:** placeholder webhook URLs or credential issues.
-- **Fix:** replace placeholder URLs, test webhook endpoint independently, re-run workflow manually.
+- **Symptoms:** external integration executes but no notification.
+- **Cause:** webhook URL/credential issues in your orchestration platform.
+- **Fix:** validate webhook endpoint independently and re-run with backend health/integrity checks first.
 
 ## Logs and Signal Interpretation
 

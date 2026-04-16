@@ -38,12 +38,11 @@ bash test_upload.sh
 - History report opens and shows persisted metadata + flows.
 - SBOM page returns components/vulnerability details after upload.
 
-## 5) n8n Validation
+## 5) Integrity Validation
 
-- Trigger each workflow manually once.
-- Confirm backend endpoint calls succeed.
-- Confirm alert/report webhook payloads are posted.
-- Check branch conditions (alerts/no-alert paths) execute as expected.
+- `GET /api/model/integrity` returns check list and status.
+- `GET /api/integrity` returns overall + individual backend checks.
+- Confirm critical checks are `ok` before trust in alerting/reporting.
 
 ## ML Validation Approach
 

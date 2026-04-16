@@ -34,14 +34,6 @@ Network/
 │   │   │   └── pages/
 │   │   ├── dist/
 │   │   └── node_modules/
-│   ├── n8n/
-│   │   ├── 1_network_security_monitoring.json
-│   │   ├── 2_automated_file_analysis.json
-│   │   ├── 3_training_pipeline.json
-│   │   ├── 4_daily_security_report.json
-│   │   ├── 5_live_monitoring_management.json
-│   │   ├── import_workflows.sh
-│   │   └── README.md
 │   ├── training_pipeline/
 │   │   ├── train.py
 │   │   ├── configs/system_config.template.yaml
@@ -78,7 +70,6 @@ Network/
 - `nal/backend`: API layer and orchestration logic.
 - `nal/core`: shared preprocessing utilities consumed in both training and inference.
 - `nal/frontend`: operator UI, charts, and workflow controls.
-- `nal/n8n`: automation definitions and import utility.
 - `nal/training_pipeline`: training orchestration, dataset tooling, and model artifact generation.
 - `nal/security/sbom.json`: existing CycloneDX-style SBOM artifact in repository.
 - `nal/docs`: project documentation.

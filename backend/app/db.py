@@ -4,24 +4,18 @@ Uses SQLite for persistent storage with pagination support.
 """
 import sqlite3
 import json
-from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 import threading
+import time
+
+from app.paths import DB_PATH, PASSIVE_TIMELINE_DB_PATH, DATA_ROOT
+from app import config
 
 # Thread-safe database operations
 db_lock = threading.Lock()
 
-# Database path — go up to project root (parent of nal/)
-# Works both locally (4 parents up from nal/backend/app/db.py) and in Docker (where /app = nal/)
-_candidates = [
-    Path(__file__).resolve().parent.parent.parent.parent / "flows.db",  # local: Network/flows.db
-    Path(__file__).resolve().parent.parent.parent / "flows.db",          # docker: /app/flows.db
-]
-DB_PATH = next((p for p in _candidates if p.parent.is_dir()), _candidates[0])
-
 # Dedicated store for the dashboard **passive** Traffic Timeline only (decoupled from flows.db queries).
-PASSIVE_TIMELINE_DB_PATH = DB_PATH.parent / "passive_timeline.db"
 passive_timeline_lock = threading.Lock()
 
 # Protocol filter: DB may store number ("6") or name ("TCP") from different sources. Match both.
@@ -37,10 +31,64 @@ PROTOCOL_FILTER_VALUES = {
 }
 
 
+def _ensure_data_root() -> None:
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def _apply_connection_pragmas(conn: sqlite3.Connection) -> None:
+    if not str(config.DATABASE_URL).startswith("sqlite"):
+        return
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+
+
+def _connect_with_retry(path: str, retries: int = 3, delay_s: float = 0.2) -> sqlite3.Connection:
+    last_error: Exception | None = None
+    for _ in range(retries):
+        try:
+            conn = sqlite3.connect(path, timeout=5.0, check_same_thread=False)
+            _apply_connection_pragmas(conn)
+            return conn
+        except sqlite3.OperationalError as e:
+            last_error = e
+            time.sleep(delay_s)
+    raise RuntimeError(f"Unable to connect to SQLite database at {path}: {last_error}")
+
+
+def get_connection() -> sqlite3.Connection:
+    return _connect_with_retry(str(DB_PATH))
+
+
+def execute(query: str, params: tuple = ()) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(query, params)
+    conn.commit()
+    conn.close()
+
+
+def fetchall(query: str, params: tuple = ()) -> list[dict[str, Any]]:
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(query, params)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def fetchone(query: str, params: tuple = ()) -> Optional[dict[str, Any]]:
+    rows = fetchall(query, params)
+    return rows[0] if rows else None
+
+
 def init_db():
     """Initialize database schema."""
+    _ensure_data_root()
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -106,6 +154,57 @@ def init_db():
             cursor.execute("ALTER TABLE flows ADD COLUMN feed_score REAL")
         if "feed_sources" not in existing_columns:
             cursor.execute("ALTER TABLE flows ADD COLUMN feed_sources TEXT")
+        if "explanation" not in existing_columns:
+            cursor.execute("ALTER TABLE flows ADD COLUMN explanation TEXT")
+        if "model_version" not in existing_columns:
+            cursor.execute("ALTER TABLE flows ADD COLUMN model_version TEXT")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS upload_jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT,
+                created_at TEXT,
+                completed_at TEXT,
+                error TEXT,
+                filename TEXT,
+                result_summary TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_upload_jobs_created_at ON upload_jobs(created_at DESC)")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                flow_id TEXT,
+                risk_level TEXT,
+                classification TEXT,
+                created_at TEXT,
+                status TEXT,
+                reason TEXT,
+                priority TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status)")
+        cursor.execute("PRAGMA table_info(alerts)")
+        alert_cols = {row[1] for row in cursor.fetchall()}
+        if "correlation_id" not in alert_cols:
+            cursor.execute("ALTER TABLE alerts ADD COLUMN correlation_id TEXT")
+        if "source_ip" not in alert_cols:
+            cursor.execute("ALTER TABLE alerts ADD COLUMN source_ip TEXT")
+        if "destination_ip" not in alert_cols:
+            cursor.execute("ALTER TABLE alerts ADD COLUMN destination_ip TEXT")
+        if "last_seen" not in alert_cols:
+            cursor.execute("ALTER TABLE alerts ADD COLUMN last_seen TEXT")
+        if "occurrence_count" not in alert_cols:
+            cursor.execute("ALTER TABLE alerts ADD COLUMN occurrence_count INTEGER DEFAULT 1")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS model_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                version TEXT UNIQUE,
+                created_at TEXT,
+                metrics TEXT,
+                is_active BOOLEAN
+            )
+        """)
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_timestamp ON flows(timestamp DESC);
@@ -155,8 +254,9 @@ def init_db():
 
 def init_passive_timeline_db() -> None:
     """Create passive_timeline.db and optional backfill from main DB when empty."""
+    _ensure_data_root()
     with passive_timeline_lock:
-        conn = sqlite3.connect(str(PASSIVE_TIMELINE_DB_PATH))
+        conn = _connect_with_retry(str(PASSIVE_TIMELINE_DB_PATH))
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS passive_upload_points (
@@ -211,7 +311,7 @@ def record_passive_timeline_point(
     if not analysis_id or not str(uploaded_at).strip():
         return
     with passive_timeline_lock:
-        conn = sqlite3.connect(str(PASSIVE_TIMELINE_DB_PATH))
+        conn = _connect_with_retry(str(PASSIVE_TIMELINE_DB_PATH))
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -228,7 +328,7 @@ def record_passive_timeline_point(
 def get_passive_timeline_points(limit: int = 40) -> List[Dict[str, Any]]:
     """Points for passive Traffic Timeline: oldest first, cap `limit` most recent uploads."""
     with passive_timeline_lock:
-        conn = sqlite3.connect(str(PASSIVE_TIMELINE_DB_PATH))
+        conn = _connect_with_retry(str(PASSIVE_TIMELINE_DB_PATH))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         try:
@@ -263,7 +363,7 @@ def insert_analysis(
     """Insert or replace analysis metadata into history."""
     uploaded_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         cursor = conn.cursor()
         cursor.execute("""
             INSERT OR REPLACE INTO analysis_history (
@@ -298,7 +398,7 @@ def get_analysis_history(limit: int = 100, monitor_type: Optional[str] = None) -
     """Get all analyses ordered by upload time (newest first). Includes fallback from flows for pre-feature uploads.
     monitor_type: 'passive', 'active', or None for combined. Passive = Static Monitoring/upload; Active = live capture sessions."""
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         if monitor_type and str(monitor_type).strip().lower() == "passive":
@@ -419,7 +519,7 @@ def get_analysis_history(limit: int = 100, monitor_type: Optional[str] = None) -
 def _get_active_flows_by_date(date_str: str, limit: int = 500) -> List[Dict[str, Any]]:
     """Fetch active monitoring flows for a given date (YYYY-MM-DD), used for synthetic session IDs."""
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("""
@@ -579,7 +679,7 @@ def insert_flows(flows: List[Dict[str, Any]], monitor_type: str = "passive") -> 
     mt = monitor_type or "passive"
 
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         cursor = conn.cursor()
 
         inserted = 0
@@ -593,8 +693,8 @@ def insert_flows(flows: List[Dict[str, Any]], monitor_type: str = "passive") -> 
                         classification, threat_type, cve_refs, classification_reason,
                         confidence, anomaly_score, risk_score, risk_level, is_anomaly, monitor_type,
                         osint_ip, abuse_score, vt_score, final_score, final_verdict,
-                        osint_error, abuse_ok, vt_ok, feed_score, feed_sources
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        osint_error, abuse_ok, vt_ok, feed_score, feed_sources, explanation, model_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     flow.get('id'),
                     flow.get('analysis_id'),
@@ -632,6 +732,8 @@ def insert_flows(flows: List[Dict[str, Any]], monitor_type: str = "passive") -> 
                     flow.get('vt_ok'),
                     flow.get('feed_score'),
                     flow.get('feed_sources'),
+                    json.dumps(flow.get("explanation", [])),
+                    flow.get("model_version"),
                 ))
                 inserted += 1
             except Exception as e:
@@ -658,7 +760,7 @@ def get_flows(
     monitor_type: 'passive', 'active', or None for combined."""
     
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -768,10 +870,189 @@ def get_osint_flows(
         return flows, total
 
 
+def create_upload_job(job_id: str, filename: str) -> None:
+    with db_lock:
+        conn = _connect_with_retry(str(DB_PATH))
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO upload_jobs (job_id, status, created_at, completed_at, error, filename, result_summary)
+            VALUES (?, 'QUEUED', ?, NULL, NULL, ?, NULL)
+            """,
+            (job_id, datetime.now(timezone.utc).isoformat(), filename),
+        )
+        conn.commit()
+        conn.close()
+
+
+def update_upload_job(
+    job_id: str,
+    status: str,
+    error: Optional[str] = None,
+    result_summary: Optional[Dict[str, Any]] = None,
+) -> None:
+    with db_lock:
+        conn = _connect_with_retry(str(DB_PATH))
+        cur = conn.cursor()
+        completed_at = datetime.now(timezone.utc).isoformat() if status in ("COMPLETED", "FAILED") else None
+        cur.execute(
+            """
+            UPDATE upload_jobs
+            SET status = ?, completed_at = ?, error = ?, result_summary = COALESCE(?, result_summary)
+            WHERE job_id = ?
+            """,
+            (status, completed_at, error, json.dumps(result_summary) if result_summary is not None else None, job_id),
+        )
+        conn.commit()
+        conn.close()
+
+
+def get_upload_job(job_id: str) -> Optional[Dict[str, Any]]:
+    with db_lock:
+        conn = _connect_with_retry(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM upload_jobs WHERE job_id = ?", (job_id,))
+        row = cur.fetchone()
+        conn.close()
+    if not row:
+        return None
+    payload = dict(row)
+    try:
+        payload["result_summary"] = json.loads(payload["result_summary"] or "{}")
+    except Exception:
+        payload["result_summary"] = {}
+    return payload
+
+
+def list_upload_jobs(limit: int = 50) -> List[Dict[str, Any]]:
+    with db_lock:
+        conn = _connect_with_retry(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM upload_jobs ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 500)),))
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+    for row in rows:
+        try:
+            row["result_summary"] = json.loads(row.get("result_summary") or "{}")
+        except Exception:
+            row["result_summary"] = {}
+    return rows
+
+
+def create_alert(flow: Dict[str, Any], reason: str, priority: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    src = str(flow.get("src_ip") or "")
+    dst = str(flow.get("dst_ip") or "")
+    classification = str(flow.get("classification") or "")
+    corr_window = max(1, int(config.ALERT_CORRELATION_WINDOW_MINUTES))
+    existing = fetchone(
+        """
+        SELECT * FROM alerts
+        WHERE created_at >= datetime('now', '-' || ? || ' minutes')
+          AND LOWER(COALESCE(classification,'')) = LOWER(?)
+          AND (LOWER(COALESCE(source_ip,'')) = LOWER(?) OR LOWER(COALESCE(destination_ip,'')) = LOWER(?) OR LOWER(COALESCE(source_ip,'')) = LOWER(?) OR LOWER(COALESCE(destination_ip,'')) = LOWER(?))
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (corr_window, classification, src, src, dst, dst),
+    )
+    if existing:
+        execute(
+            "UPDATE alerts SET occurrence_count = COALESCE(occurrence_count,1)+1, last_seen = ?, reason = ?, priority = ? WHERE id = ?",
+            (now, reason, priority, existing["id"]),
+        )
+        return
+    correlation_id = f"{classification}:{src or dst}:{int(time.time())}"
+    execute(
+        """
+        INSERT INTO alerts (flow_id, risk_level, classification, created_at, status, reason, priority, correlation_id, source_ip, destination_ip, last_seen, occurrence_count)
+        VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, 1)
+        """,
+        (
+            str(flow.get("id") or ""),
+            str(flow.get("risk_level") or ""),
+            classification,
+            now,
+            reason,
+            priority,
+            correlation_id,
+            src,
+            dst,
+            now,
+        ),
+    )
+
+
+def list_alerts(status: Optional[str] = None, risk_level: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    where = []
+    params: list[Any] = []
+    if status:
+        where.append("LOWER(status)=LOWER(?)")
+        params.append(status)
+    if risk_level:
+        where.append("LOWER(risk_level)=LOWER(?)")
+        params.append(risk_level)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    return fetchall(f"SELECT * FROM alerts {where_sql} ORDER BY created_at DESC LIMIT ?", tuple(params + [limit]))
+
+
+def get_alert(alert_id: int) -> Optional[Dict[str, Any]]:
+    return fetchone("SELECT * FROM alerts WHERE id = ?", (alert_id,))
+
+
+def update_alert_status(alert_id: int, status: str) -> bool:
+    execute("UPDATE alerts SET status = ? WHERE id = ?", (status, alert_id))
+    return True
+
+
+def register_model_version(version: str, metrics: Dict[str, Any]) -> None:
+    execute("UPDATE model_versions SET is_active = 0")
+    execute(
+        """
+        INSERT OR IGNORE INTO model_versions (version, created_at, metrics, is_active)
+        VALUES (?, ?, ?, 1)
+        """,
+        (version, datetime.now(timezone.utc).isoformat(), json.dumps(metrics or {})),
+    )
+    execute("UPDATE model_versions SET is_active = 1 WHERE version = ?", (version,))
+
+
+def get_model_versions() -> List[Dict[str, Any]]:
+    rows = fetchall("SELECT * FROM model_versions ORDER BY created_at DESC")
+    for r in rows:
+        try:
+            r["metrics"] = json.loads(r.get("metrics") or "{}")
+        except Exception:
+            r["metrics"] = {}
+    return rows
+
+
+def get_active_model_version() -> Optional[str]:
+    row = fetchone("SELECT version FROM model_versions WHERE is_active = 1 ORDER BY id DESC LIMIT 1")
+    return row.get("version") if row else None
+
+
+def run_retention_cleanup(days: int) -> Dict[str, int]:
+    with db_lock:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM flows WHERE created_at < datetime('now', '-' || ? || ' days')", (days,))
+        flows_deleted = cur.rowcount or 0
+        cur.execute("DELETE FROM upload_jobs WHERE created_at < datetime('now', '-' || ? || ' days')", (days,))
+        jobs_deleted = cur.rowcount or 0
+        cur.execute("DELETE FROM alerts WHERE status = 'RESOLVED' AND created_at < datetime('now', '-' || ? || ' days')", (days,))
+        alerts_deleted = cur.rowcount or 0
+        conn.commit()
+        conn.close()
+    return {"flows_deleted": flows_deleted, "jobs_deleted": jobs_deleted, "alerts_deleted": alerts_deleted}
+
+
 def get_flow_counts_by_monitor_type() -> Dict[str, int]:
     """Return count of flows per monitor_type for debugging."""
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         cursor = conn.cursor()
         cursor.execute("""
             SELECT COALESCE(monitor_type, 'passive') as mt, COUNT(*) as cnt
@@ -798,7 +1079,7 @@ def get_dashboard_stats(monitor_type: Optional[str] = None) -> Dict[str, Any]:
         passive_timeline_precomputed = get_passive_timeline_points(limit=40)
 
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -1012,7 +1293,7 @@ def get_traffic_trends(
 def delete_old_flows(days: int = 7) -> int:
     """Delete flows older than specified days. Returns deleted count."""
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -1029,7 +1310,7 @@ def delete_old_flows(days: int = 7) -> int:
 def get_total_flows_count() -> int:
     """Get total number of flows in database."""
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM flows")
         count = cursor.fetchone()[0]
@@ -1045,7 +1326,7 @@ def get_anomaly_data(top_n: int = 50) -> Dict[str, Any]:
     - classification is not BENIGN.
     """
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -1125,7 +1406,7 @@ def get_threat_data(
     monitor_type: 'passive', 'active', or None for combined.
     """
     with db_lock:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = _connect_with_retry(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

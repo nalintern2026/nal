@@ -24,7 +24,7 @@
 4. 79 CIC-style features are computed per flow.
 5. `classify_flows()` applies scaler + RF + IF + rule logic.
 6. Enriched flows are inserted into SQLite (`monitor_type=active`).
-7. UI/n8n query status and aggregated flow metrics via API.
+7. UI/external integrations query status and aggregated flow metrics via API.
 
 **Format transitions**
 - raw packets -> flow feature dicts -> scaled feature matrix -> enriched flow records -> SQLite rows.
@@ -64,7 +64,7 @@ flowchart TD
   K --> L[(flows.db: flows + history)]
   L --> O[(passive_timeline.db: passive_upload_points)]
   L --> M[Dashboard/Anomalies/History APIs]
-  M --> N[React frontend + n8n workflows]
+  M --> N[React frontend + external integrations]
 ```
 
 ## Real-Time vs Batch

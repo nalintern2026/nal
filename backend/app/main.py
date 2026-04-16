@@ -5,7 +5,8 @@ import os
 import json
 import uuid
 import random
-import glob
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 import shutil
@@ -22,16 +23,25 @@ except Exception:
 
 from app.services.decision_service import decision_engine
 from app.services.threat_feeds import threat_feed_store
+from app.services.model_integrity import evaluate_model_integrity
+from app.services.integrity_service import run_integrity_checks
+from app.services.flow_queue import wait_for_drain
+from app.services.queue_service import queue_status, enqueue_flow_batch
+from app import config
 from app import db
+from app.paths import TEMP_UPLOADS_DIR
+from app.utils.response import success, failed, degraded
+from app.utils.logger import get_logger
 
 # Start background threat feed downloads (daemon thread, non-blocking)
 threat_feed_store.start_background_refresh()
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, Tuple
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # OSINT routes (dedicated UI page)
 from app.osint_routes import router as osint_router
@@ -41,21 +51,72 @@ app = FastAPI(
     description="Hybrid ML-based network security intelligence system",
     version="1.0.0",
 )
+logger = get_logger(__name__)
 
-# CORS - allow frontend
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Initialize database
 db.init_db()
+cleanup_info = db.run_retention_cleanup(config.DATA_RETENTION_DAYS)
+logger.info("Retention cleanup completed: %s", cleanup_info)
+db.register_model_version(
+    version=f"rf:{bool(decision_engine.rf_model)}-if:{bool(decision_engine.if_model)}-features:{len(decision_engine.feature_names) if decision_engine.feature_names is not None else 0}",
+    metrics={},
+)
+
+
+def _retention_loop() -> None:
+    while True:
+        try:
+            db.run_retention_cleanup(config.DATA_RETENTION_DAYS)
+        except Exception as e:
+            logger.error("Retention cleanup loop error: %s", e)
+        time.sleep(3600)
+
+
+threading.Thread(target=_retention_loop, daemon=True).start()
+if not config.API_KEY:
+    logger.error("NETGUARD_API_KEY is not configured. Protected /api endpoints will reject requests.")
 
 # Routes
 app.include_router(osint_router)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(_: Request, exc: StarletteHTTPException):
+    return JSONResponse(status_code=exc.status_code, content=failed("HTTP_ERROR", str(exc.detail)))
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(_: Request, exc: Exception):
+    logger.error("Unhandled API exception: %s", exc, exc_info=True)
+    return JSONResponse(status_code=500, content=failed("INTERNAL_ERROR", "Internal server error"))
+
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    if not request.url.path.startswith("/api"):
+        return await call_next(request)
+    # Temporary bypass: keep APIs usable when NETGUARD_API_KEY is not set.
+    if not config.API_KEY:
+        return await call_next(request)
+    if request.url.path in ("/api/health", "/api/model/integrity", "/api/integrity"):
+        return await call_next(request)
+    provided = request.headers.get(config.API_KEY_HEADER, "")
+    if not provided:
+        return JSONResponse(status_code=401, content=failed("UNAUTHORIZED", "Missing API key"))
+    if provided != config.API_KEY:
+        return JSONResponse(status_code=401, content=failed("UNAUTHORIZED", "Invalid API key"))
+    return await call_next(request)
 
 # ── In-memory storage (for analysis results only) ────────────────────
 # Flow records are now stored in SQLite database (db.py)
@@ -231,25 +292,48 @@ class AnalysisResult(BaseModel):
 # ── Health Check ────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health_check():
-    return {
+    model_integrity = evaluate_model_integrity()
+    status_payload = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0",
-        "models_loaded": True,
+        "models_loaded": model_integrity["status"] == "ok",
+        "api_key_configured": bool(config.API_KEY),
         "services": {
-            "supervised_model": "active" if decision_engine.rf_model else "inactive (no labels)",
-            "anomaly_detector": "active" if decision_engine.if_model else "inactive",
-            "decision_engine": "active",
+            "supervised_model": "active" if decision_engine.rf_model else "MODEL_UNAVAILABLE",
+            "anomaly_detector": "active" if decision_engine.if_model else "MODEL_UNAVAILABLE",
+            "decision_engine": "active" if decision_engine.models_ready else "MODEL_UNAVAILABLE",
             "sbom_scanner": "active (user upload only; no project dependencies)",
         },
+        "model_integrity": model_integrity["status"],
+        "queue": queue_status(),
     }
+    return success(status_payload)
+
+
+@app.get("/api/model/integrity")
+async def model_integrity():
+    res = evaluate_model_integrity()
+    if res.get("status") != "ok":
+        return degraded(res, code="MODEL_DEGRADED", message="Model integrity checks failing")
+    return success(res)
+
+
+@app.get("/api/integrity")
+async def integrity():
+    res = run_integrity_checks()
+    res["queue_status"] = queue_status()
+    res["security_mode"] = "API_KEY"
+    if res.get("status") != "ok":
+        return degraded(res, code="INTEGRITY_DEGRADED", message="One or more integrity checks failed")
+    return success(res)
 
 
 # ── Dashboard Stats ─────────────────────────────────────────────────────
 @app.get("/api/dashboard/stats")
 async def dashboard_stats(monitor_type: Optional[str] = None):
     """Get dashboard statistics. Optional monitor_type: 'passive' (uploads) or 'active' (realtime)."""
-    return db.get_dashboard_stats(monitor_type=monitor_type)
+    return success(db.get_dashboard_stats(monitor_type=monitor_type))
 
 
 # ── Classification criteria (thresholds & CVE mapping) ────────────────────
@@ -302,13 +386,13 @@ async def get_flows(
         monitor_type=monitor_type,
     )
     
-    return {
+    return success({
         "flows": flows,
         "total": total,
         "page": page,
         "per_page": per_page,
         "total_pages": (total + per_page - 1) // per_page,
-    }
+    })
 
 
 @app.get("/api/traffic/trends")
@@ -321,7 +405,7 @@ async def get_traffic_trends(
     points: int = 72,
     monitor_type: Optional[str] = None,
 ):
-    return db.get_traffic_trends(
+    return success(db.get_traffic_trends(
         classification=classification,
         risk_level=risk_level,
         threat_type=threat_type,
@@ -329,7 +413,7 @@ async def get_traffic_trends(
         protocol=protocol,
         points=points,
         monitor_type=monitor_type,
-    )
+    ))
 
 
 @app.get("/api/upload/{analysis_id}/flows")
@@ -345,7 +429,7 @@ async def get_upload_flows(
         per_page=per_page,
         analysis_id=analysis_id,
     )
-    return {
+    return success({
         "analysis_id": analysis_id,
         "flows": flows,
         "total": total,
@@ -353,7 +437,7 @@ async def get_upload_flows(
         "per_page": per_page,
         "total_pages": (total + per_page - 1) // per_page,
         "has_more": (page * per_page) < total,
-    }
+    })
 
 
 # ── Anomalies ───────────────────────────────────────────────────────────
@@ -369,7 +453,7 @@ async def get_anomalies(
 ):
     """Get threat data (all attack/anomaly types) from flow records. monitor_type: passive, active, or combined."""
     per_page = max(1, min(per_page, 200))
-    return db.get_threat_data(
+    return success(db.get_threat_data(
         page=page,
         per_page=per_page,
         classification=classification,
@@ -377,7 +461,7 @@ async def get_anomalies(
         src_ip=src_ip,
         protocol=protocol,
         monitor_type=monitor_type,
-    )
+    ))
 
 
 # ── Model Performance ────────────────────────────────────────────────────
@@ -431,7 +515,7 @@ async def model_metrics():
             "last_trained": None,
         }
 
-    return {
+    return success({
         "models": models,
         "training_info": training_info,
         "live_metrics": live_metrics,
@@ -441,7 +525,7 @@ async def model_metrics():
             "scaler_loaded": bool(decision_engine.scaler),
         },
         "source": source,
-    }
+    })
 
 
 # ── File Upload ──────────────────────────────────────────────────────────
@@ -491,55 +575,22 @@ def _detect_pcap_magic(path: Path) -> Optional[str]:
     return None
 
 
-@app.post("/api/upload")
-async def upload_file(file: UploadFile = File(..., alias="file")):
-    global flow_records, analysis_results
-
-    filename = _normalize_filename(file.filename)
-    if not filename:
-        raise HTTPException(status_code=400, detail="No file provided")
-
-    # Save to temp first so we can use magic-byte detection for extension-less files (e.g. pcap chunks)
-    temp_dir = Path(__file__).parent.parent.parent.parent / "temp_uploads"
-    temp_dir.mkdir(exist_ok=True)
-    file_path = temp_dir / f"{uuid.uuid4()}_{filename}"
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    file_size = file_path.stat().st_size if file_path.exists() else None
-
-    ext = _allowed_extension(filename)
-    if ext is None:
-        ext = _detect_pcap_magic(file_path)
-    if ext is None:
-        if file_path.exists():
-            try:
-                file_path.unlink()
-            except Exception:
-                pass
-        raise HTTPException(
-            status_code=400,
-            detail=f"File type not supported (got '{file.filename}'). Allowed: .pcap, .pcapng, .csv (or extension-less pcap/pcapng).",
-        )
-
+def _process_upload_job(job_id: str, file_path: str, filename: str, file_size: int, ext: str) -> None:
+    db.update_upload_job(job_id, "PROCESSING")
     try:
-        # Run real analysis; pass 'pcap' for both .pcap and .pcapng (decision_service treats both same)
         file_type = "pcap" if ext in ("pcap", "pcapng") else "csv"
-        
         result = decision_engine.analyze_file(
-            str(file_path),
+            file_path,
             file_type,
             include_flows=False,
             source_filename=filename,
-            on_chunk_processed=lambda flows: db.insert_flows(flows, monitor_type="passive"),
+            on_chunk_processed=lambda flows: enqueue_flow_batch(flows, monitor_type="passive"),
         )
-        
+        wait_for_drain()
         if "error" in result:
-             raise HTTPException(status_code=500, detail=result["error"])
-
-        analysis_results[result['id']] = result
-
-        # Persist to analysis history (survives refresh)
+            db.update_upload_job(job_id, "FAILED", error=result["error"])
+            return
+        analysis_results[result["id"]] = result
         db.insert_analysis(
             analysis_id=result["id"],
             filename=filename,
@@ -552,36 +603,121 @@ async def upload_file(file: UploadFile = File(..., alias="file")):
             risk_distribution=result.get("risk_distribution", {}),
             report_details=result.get("report_details", {}),
         )
-        
-        return {
-            "status": "success",
-            "id": result['id'],
-            "filename": filename,
-            "total_flows": result.get('total_flows', 0),
-            "attack_distribution": result.get('attack_distribution', {}),
-            "risk_distribution": result.get('risk_distribution', {}),
-            "anomaly_count": result.get('anomaly_count', 0),
-            "avg_risk_score": result.get('avg_risk_score', 0),
-            "sample_flows": result.get('sample_flows', []),
-            "report_details": result.get('report_details', {}),
-            "file_size": file_size,
-        }
-        
+        db.update_upload_job(
+            job_id,
+            "COMPLETED",
+            result_summary={
+                "id": result["id"],
+                "filename": filename,
+                "total_flows": result.get("total_flows", 0),
+                "attack_distribution": result.get("attack_distribution", {}),
+                "risk_distribution": result.get("risk_distribution", {}),
+                "anomaly_count": result.get("anomaly_count", 0),
+                "avg_risk_score": result.get("avg_risk_score", 0),
+                "sample_flows": result.get("sample_flows", []),
+                "report_details": result.get("report_details", {}),
+                "file_size": file_size,
+            },
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Upload job failed: %s", e)
+        db.update_upload_job(job_id, "FAILED", error=str(e))
     finally:
+        try:
+            p = Path(file_path)
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+
+@app.post("/api/upload")
+async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(..., alias="file")):
+    filename = _normalize_filename(file.filename)
+    if not filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    TEMP_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    file_path = TEMP_UPLOADS_DIR / f"{uuid.uuid4()}_{filename}"
+    size = 0
+    try:
+        with open(file_path, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > config.UPLOAD_MAX_FILE_SIZE_BYTES:
+                    raise HTTPException(status_code=413, detail=f"File too large. Max {config.UPLOAD_MAX_FILE_SIZE_BYTES} bytes")
+                f.write(chunk)
+        ext = _allowed_extension(filename) or _detect_pcap_magic(file_path)
+        if ext is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type not supported (got '{file.filename}'). Allowed: .pcap, .pcapng, .csv (or extension-less pcap/pcapng).",
+            )
+        job_id = str(uuid.uuid4())[:12]
+        db.create_upload_job(job_id, filename)
+        background_tasks.add_task(_process_upload_job, job_id, str(file_path), filename, size, ext)
+        return success({"job_id": job_id, "status": "QUEUED"})
+    except HTTPException:
         if file_path.exists():
-            try:
-                os.remove(file_path)
-            except:
-                pass
+            file_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+
+
+@app.get("/api/upload/jobs/{job_id}")
+async def get_upload_job(job_id: str):
+    payload = db.get_upload_job(job_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Upload job not found")
+    return success(payload)
+
+
+@app.get("/api/upload/jobs")
+async def list_upload_jobs(limit: int = 50):
+    return success({"jobs": db.list_upload_jobs(limit=limit)})
+
+
+@app.get("/api/alerts")
+async def alerts(status: Optional[str] = None, risk_level: Optional[str] = None, limit: int = 100):
+    return success({"alerts": db.list_alerts(status=status, risk_level=risk_level, limit=limit)})
+
+
+@app.get("/api/alerts/{alert_id}")
+async def alert_by_id(alert_id: int):
+    alert = db.get_alert(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return success(alert)
+
+
+@app.patch("/api/alerts/{alert_id}")
+async def alert_update(alert_id: int, payload: Dict[str, str]):
+    status = str(payload.get("status", "")).upper()
+    if status not in ("OPEN", "ACKNOWLEDGED", "RESOLVED"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    db.update_alert_status(alert_id, status)
+    return success({"id": alert_id, "status": status})
+
+
+@app.get("/api/model/versions")
+async def model_versions():
+    return success({"versions": db.get_model_versions()})
+
+
+@app.get("/api/model/active")
+async def model_active():
+    return success({"active_version": db.get_active_model_version()})
 
 
 # ── Analysis History ──────────────────────────────────────────────────────
 @app.get("/api/history")
 async def get_history(limit: int = 100, monitor_type: Optional[str] = None):
     """List all analyses ordered by upload time (newest first). monitor_type: passive, active, or combined."""
-    return {"analyses": db.get_analysis_history(limit=limit, monitor_type=monitor_type)}
+    return success({"analyses": db.get_analysis_history(limit=limit, monitor_type=monitor_type)})
 
 
 @app.get("/api/history/{analysis_id}")
@@ -590,7 +726,7 @@ async def get_history_report(analysis_id: str):
     report = db.get_analysis_report(analysis_id)
     if not report:
         raise HTTPException(status_code=404, detail="Analysis not found")
-    return report
+    return success(report)
 
 
 # ── Active / Realtime Monitoring ──────────────────────────────────────────
@@ -601,19 +737,16 @@ from app.services.realtime_service import realtime_monitor
 async def start_realtime_monitor(interface: str = ""):
     """Start active packet monitoring on the given interface. Run backend with sudo for sniffing."""
     if realtime_monitor.running:
-        return {"status": "error", "message": "Already running"}
-    # Run in daemon thread so we never block the event loop
-    import threading
-    t = threading.Thread(target=realtime_monitor.start, args=(interface or "",), daemon=True)
-    t.start()
-    return {"status": "started", "interface": interface or "default"}
+        return degraded({"message": "Already running", "state": realtime_monitor.get_status().get("state")}, code="ALREADY_RUNNING", message="Realtime monitor already running")
+    realtime_monitor.start(interface or "")
+    return success({"status": "started", "interface": interface or "default"})
 
 
 @app.post("/api/realtime/stop")
 async def stop_realtime_monitor():
     """Stop active monitoring."""
     realtime_monitor.stop()
-    return {"status": "stopped"}
+    return success({"status": "stopped"})
 
 
 @app.get("/api/realtime/status")
@@ -626,13 +759,13 @@ async def get_realtime_status():
         status["flow_counts"] = flows_by_type
     except Exception:
         status["flow_counts"] = {}
-    return status
+    return success(status)
 
 
 @app.get("/api/threat-feeds/status")
 async def get_threat_feed_status():
     """Get status of local threat intelligence feeds."""
-    return threat_feed_store.get_status()
+    return success(threat_feed_store.get_status())
 
 
 @app.get("/api/realtime/interfaces")
@@ -641,14 +774,14 @@ async def get_realtime_interfaces():
     try:
         from scapy.all import get_if_list
         ifaces = get_if_list()
-        return {"interfaces": sorted(ifaces) if ifaces else ["lo"]}
+        return success({"interfaces": sorted(ifaces) if ifaces else ["lo"]})
     except Exception:
         try:
             import psutil
             ifaces = list(psutil.net_if_addrs().keys())
-            return {"interfaces": sorted(ifaces)}
+            return success({"interfaces": sorted(ifaces)})
         except Exception:
-            return {"interfaces": ["lo", "eth0", "wlan0"]}
+            return degraded({"interfaces": ["lo", "eth0", "wlan0"]}, code="INTERFACE_LIST_DEGRADED", message="Using fallback interface list")
 
 
 # ── SBOM Security ────────────────────────────────────────────────────────

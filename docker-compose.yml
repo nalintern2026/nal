@@ -29,21 +29,3 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
-
-  # n8n Workflow Automation
-  n8n:
-    image: n8nio/n8n:latest
-    ports:
-      - "5678:5678"
-    volumes:
-      - n8n_data:/home/node/.n8n
-      - ./n8n:/home/node/n8n-workflows:ro
-    environment:
-      - N8N_SECURE_COOKIE=false
-      - N8N_RUNNERS_ENABLED=false
-    depends_on:
-      - backend
-    restart: unless-stopped
-
-volumes:
-  n8n_data:

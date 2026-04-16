@@ -4,7 +4,7 @@
 
 - **Purpose:** Central HTTP interface and orchestration layer.
 - **Key Inputs:** file uploads, query parameters, realtime control commands, SBOM files.
-- **Key Outputs:** JSON responses for UI/n8n; persistent DB writes via `db.py`.
+- **Key Outputs:** JSON responses for UI/integrations; persistent DB writes via `db.py`.
 - **Dependencies:** FastAPI, `decision_service`, `realtime_service`, `sbom_service`, `osint_routes`, `threat_feeds`, `db.py`.
 - **Internal Working:** initializes DB at startup, defines all routes, validates uploads, and maps each route to service/database operations.
 
@@ -48,11 +48,9 @@
 1. **Load and normalize input** (CSV direct, or PCAP->CSV with `cicflowmeter`).
 2. **Chunk loop** (`pandas.read_csv(..., chunksize=50000)`).
 3. **Feature cleaning** via `clean_data()` and column strip.
-4. **Feature alignment** to `feature_names.pkl` (missing columns set to 0).
+4. **Feature alignment** to `feature_names.pkl` (strict mismatch failure).
 5. **Scale** using persisted `scaler.pkl`.
-6. **Supervised prediction**:
-   - if RF + label encoder exist: `predict()` + `predict_proba()`
-   - else fallback label `BENIGN`, confidence `0.5`
+6. **Supervised prediction** via `predict()` + `predict_proba()` only when full artifact set is valid.
 7. **Unsupervised prediction**:
    - `if_model.predict()` for anomaly flag
    - `decision_function()` transformed to clipped `anomaly_score` in `[0,1]`
@@ -150,7 +148,6 @@
 - `generate_synthetic_data.py`: fallback synthetic CIC-like dataset generation.
 - `generate_doomsday_flows.py`: synthetic processed-flow generator with attack/severity variation.
 - `pcap_chunks_to_flows.py`: batch conversion from pcap chunks to CSV via CICFlowMeter.
-- `setup_project.py`: legacy setup helper referencing path config module (currently not aligned with present tree).
 
 ## Frontend Module (`nal/frontend/src`)
 
@@ -160,9 +157,7 @@
 - **Outputs:** dashboards, triage tables, report views, monitor controls, SBOM UI.
 - **Dependencies:** React, Axios, Chart.js, react-router, Tailwind.
 
-## Automation Module (`nal/n8n`)
+## Integrity Modules
 
-- **Purpose:** no-code orchestration for periodic checks, alerts, reports, and control hooks.
-- **Key Files:** five workflow JSON definitions + `import_workflows.sh`.
-- **Inputs:** scheduled triggers/webhooks + backend API responses.
-- **Outputs:** webhook/Slack notifications, monitor/start-stop actions, report payloads.
+- `backend/app/services/model_integrity.py`: model artifact existence/load/compatibility checks.
+- `backend/app/services/integrity_service.py`: import, DB, API-route, and model integrity checks.
