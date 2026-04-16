@@ -408,10 +408,10 @@ class DecisionEngine:
                     # ── OSINT validation (only when anomaly detector flags a flow) ──
                     # ml_confidence is interpreted as 0..100 for the final score.
                     if is_anom:
+                        ml_confidence = float(np.clip(anom_score, 0, 1)) * 100.0
                         ip_to_check = _pick_osint_ip(row["src_ip"], row["dst_ip"])
                         if ip_to_check:
                             osint = run_osint_checks(ip_to_check)
-                            ml_confidence = float(np.clip(anom_score, 0, 1)) * 100.0
                             row["osint_ip"] = osint.ip
                             row["abuse_ok"] = bool(osint.abuse_ok)
                             row["abuse_score"] = osint.abuse_score
