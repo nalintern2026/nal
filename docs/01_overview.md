@@ -14,7 +14,7 @@ The practical problem it solves is operational security visibility: transforming
   - active live monitoring via Scapy capture windows.
 - Flow-level risk scoring and risk-level mapping (`Critical`, `High`, `Medium`, `Low`).
 - Threat-to-CVE contextual mapping and classification reason generation.
-- Persistent storage in SQLite (`flows.db`) for flows and analysis history.
+- Persistent storage in SQLite (`flows.db`) for flows and analysis history, plus `passive_timeline.db` for passive dashboard timeline points.
 - React dashboard for monitoring, anomaly triage, historical reports, model metrics, and SBOM security.
 - SBOM analysis for uploaded dependency manifests with vulnerability enrichment from OSV.
 - n8n automation workflows for health checks, alerting, periodic reports, training checks, and monitor control.
@@ -47,4 +47,4 @@ Typical use cases:
 - **Real-time behavior:** active monitoring loop captures every ~5 seconds, classifies, and inserts new flows.
 - **Batch behavior:** uploaded files are processed in CSV chunks (default 50,000 rows) to control memory.
 - **Fallback behavior:** if trained supervised artifacts are missing, the system still runs unsupervised anomaly detection with BENIGN fallback labels and adjusted risk logic.
-- **Data retention behavior:** persistent flow/history data is stored in root-level `flows.db`; uploaded raw files are processed then removed from temporary locations.
+- **Data retention behavior:** persistent flow/history data is stored in root-level `flows.db` and passive timeline snapshots in `passive_timeline.db`; uploaded raw files are processed then removed from temporary locations.

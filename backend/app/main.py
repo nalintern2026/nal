@@ -21,7 +21,11 @@ except Exception:
     pass
 
 from app.services.decision_service import decision_engine
+from app.services.threat_feeds import threat_feed_store
 from app import db
+
+# Start background threat feed downloads (daemon thread, non-blocking)
+threat_feed_store.start_background_refresh()
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -623,6 +627,12 @@ async def get_realtime_status():
     except Exception:
         status["flow_counts"] = {}
     return status
+
+
+@app.get("/api/threat-feeds/status")
+async def get_threat_feed_status():
+    """Get status of local threat intelligence feeds."""
+    return threat_feed_store.get_status()
 
 
 @app.get("/api/realtime/interfaces")

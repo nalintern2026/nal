@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getHistory } from '../services/api';
+import { SectionHeading, TogglePills } from '../components/Primitives';
 import {
     History as HistoryIcon,
     FileText,
@@ -63,46 +64,21 @@ export default function History() {
     return (
         <div className="max-w-4xl mx-auto space-y-8">
             <div className="flex items-center justify-between gap-4 flex-wrap mb-8">
-                <div className="text-center flex-1 min-w-0">
-                    <h1 className="text-h1 font-bold text-primary mb-2">Analysis History</h1>
-                    <p className="text-body text-text-muted">
-                        View past analyses. Click any report to open full details.
-                        {monitorView === 'active' && ' Showing: Active monitoring sessions.'}
-                        {monitorView === 'passive' && ' Showing: Passive (upload) analyses.'}
-                        {!monitorView && ' Showing: All analyses (combined).'}
-                    </p>
-                </div>
+                <SectionHeading
+                    title="Analysis History"
+                    subtitle={`View past analyses. Click any report to open full details.${monitorView === 'active' ? ' Showing: Active monitoring sessions.' : monitorView === 'passive' ? ' Showing: Passive (upload) analyses.' : ' Showing: All analyses (combined).'}`}
+                />
                 <div className="flex items-center gap-2">
                     <span className="text-small font-medium text-text-muted uppercase tracking-wider">View</span>
-                    <div className="flex rounded-xl bg-surface border border-white/10 p-0.5">
-                        <button
-                            type="button"
-                            onClick={() => setMonitorView('')}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${!monitorView
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Combined
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setMonitorView('active')}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${monitorView === 'active'
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Active
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setMonitorView('passive')}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${monitorView === 'passive'
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Passive
-                        </button>
-                    </div>
+                    <TogglePills
+                        value={monitorView}
+                        onChange={setMonitorView}
+                        options={[
+                            { value: '', label: 'Combined' },
+                            { value: 'active', label: 'Active' },
+                            { value: 'passive', label: 'Passive' },
+                        ]}
+                    />
                 </div>
             </div>
 

@@ -5,7 +5,7 @@
 - **Purpose:** Central HTTP interface and orchestration layer.
 - **Key Inputs:** file uploads, query parameters, realtime control commands, SBOM files.
 - **Key Outputs:** JSON responses for UI/n8n; persistent DB writes via `db.py`.
-- **Dependencies:** FastAPI, `decision_service`, `realtime_service`, `sbom_service`, `db.py`.
+- **Dependencies:** FastAPI, `decision_service`, `realtime_service`, `sbom_service`, `osint_routes`, `threat_feeds`, `db.py`.
 - **Internal Working:** initializes DB at startup, defines all routes, validates uploads, and maps each route to service/database operations.
 
 ### Main API route groups
@@ -14,13 +14,14 @@
 - **Traffic analytics:** `/api/dashboard/stats`, `/api/traffic/flows`, `/api/traffic/trends`, `/api/anomalies`
 - **Upload and history:** `/api/upload`, `/api/upload/{analysis_id}/flows`, `/api/history`, `/api/history/{analysis_id}`
 - **Realtime controls:** `/api/realtime/start`, `/api/realtime/stop`, `/api/realtime/status`, `/api/realtime/interfaces`
+- **Threat intelligence:** `/api/threat-feeds/status`, `/api/osint/flows`
 - **Model telemetry:** `/api/models/metrics`
 - **SBOM security:** `/api/security/sbom/analyze`, `/api/security/sbom`, `/api/security/vulnerabilities`, `/api/security/sbom/download`
 
 ## Database Module (`nal/backend/app/db.py`)
 
 - **Purpose:** Persistent storage and aggregated querying over flow/security telemetry.
-- **Key Files:** `flows.db` (root), schema logic in `init_db()`.
+- **Key Files:** `flows.db` and `passive_timeline.db` (root), schema logic in `init_db()` / `init_passive_timeline_db()`.
 - **Inputs:** enriched flow dictionaries from passive/active processing.
 - **Outputs:** paginated rows, dashboard aggregates, trend points, analysis reports.
 - **Dependencies:** `sqlite3`, thread lock for safe concurrent access.
@@ -32,6 +33,7 @@
   - ML/security: `classification`, `threat_type`, `cve_refs`, `classification_reason`, `confidence`, `anomaly_score`, `risk_score`, `risk_level`, `is_anomaly`
   - source marker: `monitor_type` (`passive` or `active`)
 - `analysis_history` stores summarized upload-analysis reports and JSON distributions.
+- `passive_upload_points` in `passive_timeline.db` stores passive timeline chart points.
 
 ## Decision Module (`nal/backend/app/services/decision_service.py`)
 
@@ -107,6 +109,20 @@
 - **Inputs:** uploaded manifests (`requirements.txt`, `package.json`, lock files, etc.).
 - **Outputs:** components list, vulnerabilities, severity distribution, remediation tips.
 - **Dependencies:** `cyclonedx-python-lib` (if available), `requests` (OSV API), regex/json parsers.
+
+## OSINT Module (`nal/backend/app/services/osint.py`, `nal/backend/app/osint_routes.py`)
+
+- **Purpose:** enrich anomaly flows with AbuseIPDB/VirusTotal signals and expose OSINT-filtered APIs.
+- **Inputs:** candidate public IP from anomalous flow context.
+- **Outputs:** `abuse_score`, `vt_score`, `final_score`, `final_verdict`, provider status fields per flow.
+- **Dependencies:** outbound HTTP to AbuseIPDB and VirusTotal, DB enrichment fields, `/api/osint/flows`.
+
+## Threat Feed Module (`nal/backend/app/services/threat_feeds.py`)
+
+- **Purpose:** maintain local threat-feed state in background and expose status endpoint.
+- **Inputs:** configured feed sources and refresh schedule.
+- **Outputs:** feed health/status payload from `/api/threat-feeds/status`.
+- **Dependencies:** background daemon refresh started in `main.py`.
 
 ## Shared Feature Engineering Module (`nal/core/feature_engineering.py`)
 

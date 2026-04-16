@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getSBOM, getVulnerabilities, analyzeSBOMFile, downloadSBOM } from '../services/api';
+import { SectionHeading } from '../components/Primitives';
 import {
     Shield,
     Download,
@@ -129,10 +130,7 @@ export default function SBOMSecurity() {
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                 <div>
-                    <h1 className="text-h1 font-bold text-text-primary flex items-center gap-2">
-                        <Shield size={24} className="text-primary" />
-                        SBOM Security
-                    </h1>
+                    <SectionHeading title="SBOM Security" />
                     <p className="text-body text-text-primary mt-2 max-w-2xl leading-relaxed">
                         A <strong className="text-primary">Software Bill of Materials (SBOM)</strong> is a list of every dependency in your project—like an ingredient list for your code. We parse your dependency file, build that list, then check each package against known vulnerability databases so you can see what’s safe and what needs updating.
                     </p>

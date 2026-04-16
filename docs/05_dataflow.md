@@ -9,8 +9,8 @@
 5. Chunk cleanup and feature alignment happen in decision engine.
 6. Scaler/model inference produces labels and anomaly scores.
 7. Hybrid scoring and threat/CVE enrichment are attached.
-8. Each processed chunk is inserted into SQLite (`monitor_type=passive`).
-9. Analysis summary is written into `analysis_history`.
+8. Each processed chunk is inserted into SQLite `flows.db` (`monitor_type=passive`).
+9. Analysis summary is written into `analysis_history`, and passive timeline points are written into `passive_timeline.db`.
 10. Temp upload files are removed.
 
 **Format transitions**
@@ -62,6 +62,7 @@ flowchart TD
   I --> K[Hybrid risk + threat/CVE]
   J --> K
   K --> L[(flows.db: flows + history)]
+  L --> O[(passive_timeline.db: passive_upload_points)]
   L --> M[Dashboard/Anomalies/History APIs]
   M --> N[React frontend + n8n workflows]
 ```

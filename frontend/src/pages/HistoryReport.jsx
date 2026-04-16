@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getHistoryReport, getUploadFlows } from '../services/api';
+import { SectionHeading } from '../components/Primitives';
 import {
     ArrowLeft,
     FileText,
@@ -186,7 +187,9 @@ export default function HistoryReport() {
                     <ArrowLeft size={16} />
                     Back to History
                 </button>
-                <h1 className="text-h2 font-semibold text-text-primary truncate max-w-md">{report.filename || 'Report'}</h1>
+                <div className="max-w-md truncate">
+                    <SectionHeading title={report.filename || 'Report'} subtitle="Historical analysis report details" />
+                </div>
             </div>
 
             <h2 className="section-header">Report Summary</h2>
@@ -327,7 +330,7 @@ export default function HistoryReport() {
                                                 </span>
                                             </td>
                                             <td>
-                                                <span className={`text-small font-medium ${flow.classification === 'Benign' ? 'text-success' : 'text-danger'}`}>
+                                                <span className={`text-small font-medium ${String(flow.classification || '').toUpperCase() === 'BENIGN' ? 'text-success' : 'text-danger'}`}>
                                                     {flow.classification}
                                                 </span>
                                             </td>

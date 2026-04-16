@@ -3,12 +3,15 @@ from __future__ import annotations
 import time
 import json
 import ipaddress
+import threading
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 import requests
 
 from app import config
+from app.services.threat_feeds import threat_feed_store
 
 
 @dataclass(frozen=True)
@@ -18,12 +21,42 @@ class OsintResult:
     abuse_score: Optional[float] = None  # 0..100
     vt_ok: bool = False
     vt_score: Optional[float] = None     # 0..100 (malicious ratio)
+    feed_score: float = 0.0              # 0..100 from local threat feeds
+    feed_sources: str = ""               # comma-separated feed names that matched
     error: Optional[str] = None
     raw: Optional[Dict[str, Any]] = None
 
 
 # Simple in-memory TTL cache: ip -> (expires_at_epoch, OsintResult)
 _CACHE: Dict[str, Tuple[float, OsintResult]] = {}
+
+# Global seen-set: IPs already checked this session (never re-check via API)
+_SEEN_IPS: set = set()
+_SEEN_LOCK = threading.Lock()
+
+
+# ── Per-minute rate limiters ──────────────────────────────────────────────
+
+class _RateLimiter:
+    """Sliding-window rate limiter. Non-blocking: returns False if limit hit."""
+    def __init__(self, max_per_minute: int):
+        self._max = max_per_minute
+        self._timestamps: deque = deque()
+        self._lock = threading.Lock()
+
+    def allow(self) -> bool:
+        now = time.time()
+        with self._lock:
+            while self._timestamps and self._timestamps[0] < now - 60:
+                self._timestamps.popleft()
+            if len(self._timestamps) >= self._max:
+                return False
+            self._timestamps.append(now)
+            return True
+
+
+_abuse_limiter = _RateLimiter(max_per_minute=15)
+_vt_limiter = _RateLimiter(max_per_minute=3)
 
 
 def _is_public_ip(ip: str) -> bool:
@@ -66,16 +99,12 @@ def _sleep_rate_limit(resp: requests.Response) -> None:
 
 
 def check_abuseipdb(ip: str) -> Dict[str, Any]:
-    """
-    AbuseIPDB IP check.
-    Returns dict with:
-      - ok: bool
-      - score: float|None (0..100 abuseConfidenceScore)
-      - error: str|None
-      - raw: dict|None
-    """
+    """AbuseIPDB IP check with local rate limiting."""
     if not config.ABUSEIPDB_API_KEY:
         return {"ok": False, "score": None, "error": "ABUSEIPDB_API_KEY not set", "raw": None}
+
+    if not _abuse_limiter.allow():
+        return {"ok": False, "score": None, "error": "rate-limited (local)", "raw": None}
 
     url = "https://api.abuseipdb.com/api/v2/check"
     headers = {"Key": config.ABUSEIPDB_API_KEY, "Accept": "application/json"}
@@ -90,7 +119,6 @@ def check_abuseipdb(ip: str) -> Dict[str, Any]:
                 continue
             if resp.status_code >= 400:
                 last_err = f"AbuseIPDB HTTP {resp.status_code}"
-                # transient-ish server errors: retry
                 if resp.status_code >= 500 and attempt < int(config.OSINT_MAX_RETRIES):
                     time.sleep(1.0 + attempt)
                     continue
@@ -114,16 +142,12 @@ def check_abuseipdb(ip: str) -> Dict[str, Any]:
 
 
 def check_virustotal(ip: str) -> Dict[str, Any]:
-    """
-    VirusTotal IP report.
-    Returns dict with:
-      - ok: bool
-      - score: float|None (0..100 malicious ratio based on last_analysis_stats)
-      - error: str|None
-      - raw: dict|None
-    """
+    """VirusTotal IP report with local rate limiting."""
     if not config.VIRUSTOTAL_API_KEY:
         return {"ok": False, "score": None, "error": "VIRUSTOTAL_API_KEY not set", "raw": None}
+
+    if not _vt_limiter.allow():
+        return {"ok": False, "score": None, "error": "rate-limited (local)", "raw": None}
 
     url = f"https://www.virustotal.com/api/v3/ip_addresses/{ip}"
     headers = {"x-apikey": config.VIRUSTOTAL_API_KEY, "Accept": "application/json"}
@@ -168,21 +192,42 @@ def check_virustotal(ip: str) -> Dict[str, Any]:
 
 def run_osint_checks(ip: str) -> OsintResult:
     """
-    Run AbuseIPDB + VirusTotal for a single IP with caching and safe defaults.
+    Run local threat feeds + AbuseIPDB + VirusTotal for a single IP.
+    Local feeds are always checked (free, unlimited).
+    API calls are rate-limited and deduplicated across the session.
     """
     ip = (ip or "").strip()
     if not ip:
-        return OsintResult(ip=ip, abuse_ok=False, abuse_score=None, vt_ok=False, vt_score=None, error="missing ip", raw=None)
+        return OsintResult(ip=ip, error="missing ip")
 
     if not config.OSINT_ENABLED:
-        return OsintResult(ip=ip, abuse_ok=False, abuse_score=None, vt_ok=False, vt_score=None, error="OSINT disabled", raw=None)
+        return OsintResult(ip=ip, error="OSINT disabled")
 
     if config.OSINT_SKIP_NON_PUBLIC_IPS and not _is_public_ip(ip):
-        return OsintResult(ip=ip, abuse_ok=False, abuse_score=None, vt_ok=False, vt_score=None, error="non-public ip (skipped)", raw=None)
+        return OsintResult(ip=ip, error="non-public ip (skipped)")
 
     cached = _cache_get(ip)
     if cached is not None:
         return cached
+
+    # Layer 1: local threat feeds (always available, instant)
+    feed_result = threat_feed_store.check(ip)
+
+    # Layer 2: API checks (rate-limited, deduplicated)
+    with _SEEN_LOCK:
+        already_seen = ip in _SEEN_IPS
+        _SEEN_IPS.add(ip)
+
+    if already_seen:
+        # Already checked via API this session — only return feed data
+        result = OsintResult(
+            ip=ip,
+            feed_score=feed_result.score,
+            feed_sources=feed_result.sources,
+            error="already checked (session dedup)",
+        )
+        _cache_set(ip, result)
+        return result
 
     abuse = check_abuseipdb(ip)
     vt = check_virustotal(ip)
@@ -215,6 +260,8 @@ def run_osint_checks(ip: str) -> OsintResult:
         abuse_score=abuse_score,
         vt_ok=vt_ok,
         vt_score=vt_score,
+        feed_score=feed_result.score,
+        feed_sources=feed_result.sources,
         error=error,
         raw=raw,
     )
@@ -222,23 +269,62 @@ def run_osint_checks(ip: str) -> OsintResult:
     return result
 
 
-def osint_verdict_from_final_score(final_score: float) -> str:
+def osint_verdict_from_final_score(final_score: float, osint_has_data: bool = True) -> str:
+    """
+    4-tier verdict system:
+    - Verified Threat:      ML + OSINT both agree (>70)
+    - Suspicious:           strong signal, partial OSINT (40-70)
+    - Unconfirmed Threat:   ML flagged it but OSINT has no data (20-40, or any ML-only score)
+    - Likely False Positive: weak ML signal AND OSINT says clean (<20)
+    """
     if final_score > 70:
         return "Verified Threat"
-    if 40 <= final_score <= 70:
+    if final_score >= 40:
         return "Suspicious"
+    if not osint_has_data or final_score >= 20:
+        return "Unconfirmed Threat"
     return "Likely False Positive"
 
 
-def compute_final_score(ml_confidence: float, abuse_score: Optional[float], vt_score: Optional[float]) -> float:
+def compute_final_score(
+    ml_confidence: float,
+    abuse_score: Optional[float],
+    vt_score: Optional[float],
+    rf_confidence: float = 0.0,
+    feed_score: float = 0.0,
+) -> Tuple[float, bool]:
     """
-    All inputs are interpreted as 0..100 (percent-like).
-    Missing OSINT scores default to 0 (conservative).
+    Compute a combined threat score (0..100).
+
+    Args:
+        ml_confidence: anomaly_score * 100 (0..100)
+        abuse_score:   AbuseIPDB confidence (0..100), None if unavailable
+        vt_score:      VirusTotal malicious ratio (0..100), None if unavailable
+        rf_confidence: RF classification confidence (0..1), 0 if no supervised model
+        feed_score:    local threat feed score (0..100), 0 if IP not in any feed
+
+    Returns:
+        (final_score, osint_has_data)
     """
     a = float(abuse_score) if abuse_score is not None else 0.0
     v = float(vt_score) if vt_score is not None else 0.0
     m = float(ml_confidence)
-    final = (m * 0.6) + (a * 0.2) + (v * 0.2)
-    # Clamp to [0,100]
-    return max(0.0, min(100.0, final))
+    rf = float(rf_confidence) * 100.0  # normalize to 0..100
+    f = float(feed_score)
 
+    api_has_data = (abuse_score is not None and abuse_score > 0) or \
+                   (vt_score is not None and vt_score > 0)
+    feeds_have_data = f > 0
+    osint_has_data = api_has_data or feeds_have_data
+
+    if api_has_data:
+        # Full formula: ML + RF + feeds + API OSINT
+        final = (m * 0.30) + (rf * 0.20) + (f * 0.20) + (a * 0.15) + (v * 0.15)
+    elif feeds_have_data:
+        # API quota exhausted but feeds found a match
+        final = (m * 0.35) + (rf * 0.25) + (f * 0.40)
+    else:
+        # No external data at all — pure ML
+        final = (m * 0.5) + (rf * 0.5)
+
+    return max(0.0, min(100.0, final)), osint_has_data

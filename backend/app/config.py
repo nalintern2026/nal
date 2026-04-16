@@ -2,11 +2,21 @@
 Backend runtime configuration.
 
 Secrets (API keys) are read from environment variables so they are not committed to git.
+The .env file is loaded here (earliest possible point) so all config values see the keys.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    _env_path = Path(__file__).resolve().parent.parent.parent / ".env"  # nal/.env
+    load_dotenv(dotenv_path=_env_path, override=False)
+except Exception:
+    pass
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

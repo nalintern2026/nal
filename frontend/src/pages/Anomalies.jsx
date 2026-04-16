@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getAnomalies } from '../services/api';
+import { SectionHeading, TogglePills } from '../components/Primitives';
 import {
     AlertTriangle,
     TrendingUp,
@@ -21,6 +22,7 @@ const chartColors = ['#00ADB5', '#3B82F6', '#22C55E', '#F59E0B', '#EF4444', '#A8
 export default function Anomalies() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
     const [monitorView, setMonitorView] = useState(''); // '' = combined, 'passive', 'active'
     const [filters, setFilters] = useState({
         classification: '',
@@ -32,6 +34,7 @@ export default function Anomalies() {
 
     const fetchAnomalies = async () => {
         setLoading(true);
+        setError(null);
         try {
             const params = { page, per_page: 20 };
             if (filters.classification?.trim()) params.classification = filters.classification.trim();
@@ -43,6 +46,7 @@ export default function Anomalies() {
             setData(d);
         } catch (err) {
             console.error('Failed to fetch anomalies:', err);
+            setError(err.response?.data?.detail || err.message || 'Failed to load anomaly data.');
             setData(null);
         } finally {
             setLoading(false);
@@ -65,7 +69,7 @@ export default function Anomalies() {
         return (
             <div className="flex flex-col items-center justify-center h-96">
                 <AlertTriangle size={48} className="text-danger mb-4" />
-                <p className="text-text-muted mb-4">Failed to load anomaly data. Start the backend or retry.</p>
+                <p className="text-text-muted mb-4">{error || 'Failed to load anomaly data. Start the backend or retry.'}</p>
                 <button
                     onClick={fetchAnomalies}
                     className="px-4 py-2.5 rounded-[10px] border border-primary text-primary text-body font-medium hover:bg-primary/10 transition-colors"
@@ -82,49 +86,21 @@ export default function Anomalies() {
         <div className="space-y-8">
             {/* Header + Monitor Toggle */}
             <div className="flex items-center justify-between gap-4 flex-wrap">
-                <div>
-                    <h1 className="text-h1 font-bold text-text-primary flex items-center gap-2">
-                        <AlertTriangle size={20} className="text-danger" />
-                        Anomaly Detection
-                    </h1>
-                    <p className="text-body text-text-muted mt-1">
-                        {data.total_anomalies} threats
-                        {monitorView === 'active' && ' (active monitoring)'}
-                        {monitorView === 'passive' && ' (passive / uploads)'}
-                        {!monitorView && ' (combined)'}
-                    </p>
-                </div>
+                <SectionHeading
+                    title="Anomaly Detection"
+                    subtitle={`${data.total_anomalies} threats${monitorView === 'active' ? ' (active monitoring)' : monitorView === 'passive' ? ' (passive / uploads)' : ' (combined)'}`}
+                />
                 <div className="flex items-center gap-2">
                     <span className="text-small font-medium text-text-muted uppercase tracking-wider">View</span>
-                    <div className="flex rounded-xl bg-surface border border-white/10 p-0.5">
-                        <button
-                            type="button"
-                            onClick={() => { setMonitorView(''); setPage(1); }}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${!monitorView
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Combined
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => { setMonitorView('active'); setPage(1); }}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${monitorView === 'active'
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Active
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => { setMonitorView('passive'); setPage(1); }}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${monitorView === 'passive'
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Passive
-                        </button>
-                    </div>
+                    <TogglePills
+                        value={monitorView}
+                        onChange={(value) => { setMonitorView(value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'Combined' },
+                            { value: 'active', label: 'Active' },
+                            { value: 'passive', label: 'Passive' },
+                        ]}
+                    />
                 </div>
             </div>
 

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { uploadFile, getUploadFlows, setUploadInProgress } from '../services/api';
+import { SectionHeading } from '../components/Primitives';
 import {
     Upload as UploadIcon,
     FileUp,
@@ -222,12 +223,10 @@ export default function Upload() {
     return (
         <div className="max-w-4xl mx-auto space-y-8">
             {/* Header */}
-            <div className="text-center mb-8">
-                <h1 className="text-h1 font-bold text-primary mb-2">Upload Network Capture</h1>
-                <p className="text-body text-text-muted">
-                    Upload PCAP, PCAPNG, or CSV flow files for ML-powered traffic analysis
-                </p>
-            </div>
+            <SectionHeading
+                title="Upload Network Capture"
+                subtitle="Upload PCAP, PCAPNG, or CSV flow files for ML-powered traffic analysis"
+            />
 
             {/* Drop Zone */}
             <div
@@ -515,7 +514,7 @@ export default function Upload() {
                                                         </span>
                                                     </td>
                                                     <td>
-                                                        <span className={`text-small font-medium ${flow.classification === 'Benign' ? 'text-success' : 'text-danger'}`}>
+                                                        <span className={`text-small font-medium ${String(flow.classification || '').toUpperCase() === 'BENIGN' ? 'text-success' : 'text-danger'}`}>
                                                             {flow.classification}
                                                         </span>
                                                     </td>

@@ -30,6 +30,7 @@
 - `setup_project.py` references a path/config module tree not present in this repository state (legacy/unused script risk).
 - n8n workflow field expectations may drift from current backend response keys if APIs evolve.
 - Root-level `flows.db` can grow significantly without retention management unless cleanup routines are scheduled.
+- Root-level `passive_timeline.db` is append-oriented for passive uploads and should be monitored if retention policy is introduced.
 
 ## Recommended Future Improvements
 

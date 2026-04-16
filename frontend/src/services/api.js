@@ -1,10 +1,7 @@
 import axios from 'axios';
 
-// Force backend target to local FastAPI on port 8000.
-const API_BASE = 'http://127.0.0.1:8000/api';
-
-console.log('🌐 API Service initialized with API_BASE:', API_BASE);
-console.log('🌐 VITE_API_URL env var:', import.meta.env.VITE_API_URL);
+const RAW_API_URL = (import.meta.env.VITE_API_URL || '').trim();
+const API_BASE = RAW_API_URL || 'http://127.0.0.1:8000/api';
 
 const api = axios.create({
     baseURL: API_BASE,

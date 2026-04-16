@@ -15,6 +15,7 @@ import {
     Wifi,
     Activity,
 } from 'lucide-react';
+import { SectionHeading, StatusBanner } from '../components/Primitives';
 
 export default function ActiveMonitoring() {
     const [status, setStatus] = useState(null);
@@ -29,6 +30,7 @@ export default function ActiveMonitoring() {
         try {
             const { data } = await getRealtimeStatus();
             setStatus(data);
+            setError(null);
             setLastUpdated(new Date().toLocaleTimeString());
             if (data.running && data.interface) {
                 const runningIface = data.interface.replace(' (default)', '').replace('lo (default)', '');
@@ -120,18 +122,15 @@ export default function ActiveMonitoring() {
 
     return (
         <div className="max-w-2xl mx-auto space-y-8">
-            <div className="text-center mb-8">
-                <h1 className="text-h1 font-bold text-primary mb-2">Active Monitoring</h1>
-                <p className="text-body text-text-muted">
-                    Live packet capture and flow analysis. Run backend with <code className="px-1.5 py-0.5 rounded bg-surface font-mono text-primary border border-white/10">sudo</code> for packet sniffing.
-                </p>
-            </div>
+            <SectionHeading
+                title="Active Monitoring"
+                subtitle="Live packet capture and flow analysis. Run backend with sudo for packet sniffing."
+            />
 
             {error && (
-                <div className="glass-card p-4 border-warning/30 bg-warning/10 flex items-center gap-3">
-                    <AlertTriangle size={20} className="text-warning shrink-0" />
-                    <p className="text-body text-amber-200">{error}</p>
-                </div>
+                <StatusBanner tone="warning">
+                    <span className="inline-flex items-center gap-2"><AlertTriangle size={16} />{error}</span>
+                </StatusBanner>
             )}
 
             <div className="glass-card p-6 border-primary/20">

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getTrafficFlows, getTrafficTrends } from '../services/api';
+import { SectionHeading, TogglePills } from '../components/Primitives';
 import {
     Network,
     Search,
@@ -148,49 +149,21 @@ export default function TrafficAnalysis() {
         <div className="space-y-8">
             {/* Header + Monitor Toggle */}
             <div className="flex items-center justify-between gap-4 flex-wrap">
-                <div>
-                    <h1 className="text-h1 font-bold text-text-primary flex items-center gap-2">
-                        <Network size={20} className="text-primary" />
-                        Traffic Analysis
-                    </h1>
-                    <p className="text-body text-text-muted mt-1">
-                        {total.toLocaleString()} flows
-                        {monitorView === 'active' && ' (active monitoring)'}
-                        {monitorView === 'passive' && ' (passive / uploads)'}
-                        {!monitorView && ' (combined)'}
-                    </p>
-                </div>
+                <SectionHeading
+                    title="Traffic Analysis"
+                    subtitle={`${total.toLocaleString()} flows${monitorView === 'active' ? ' (active monitoring)' : monitorView === 'passive' ? ' (passive / uploads)' : ' (combined)'}`}
+                />
                 <div className="flex items-center gap-2">
                     <span className="text-small font-medium text-text-muted uppercase tracking-wider">View</span>
-                    <div className="flex rounded-xl bg-surface border border-white/10 p-0.5">
-                        <button
-                            type="button"
-                            onClick={() => { setMonitorView(''); setPage(1); }}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${!monitorView
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Combined
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => { setMonitorView('active'); setPage(1); }}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${monitorView === 'active'
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Active
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => { setMonitorView('passive'); setPage(1); }}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${monitorView === 'passive'
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Passive
-                        </button>
-                    </div>
+                    <TogglePills
+                        value={monitorView}
+                        onChange={(value) => { setMonitorView(value); setPage(1); }}
+                        options={[
+                            { value: '', label: 'Combined' },
+                            { value: 'active', label: 'Active' },
+                            { value: 'passive', label: 'Passive' },
+                        ]}
+                    />
                 </div>
             </div>
 
@@ -275,7 +248,7 @@ export default function TrafficAnalysis() {
             </h2>
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <div className="glass-card p-6">
-                    <h3 className="text-h2 font-semibold text-text-primary mb-3">Flow Volume & Threat Mix (Averaged by Hour)</h3>
+                    <h3 className="text-h2 font-semibold text-text-primary mb-3">Flow Volume & Threat Mix (Time Buckets)</h3>
                     <div className="h-72">
                         <Line
                             data={{

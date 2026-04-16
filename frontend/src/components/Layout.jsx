@@ -64,20 +64,20 @@ export default function Layout({ children }) {
         <div className="flex h-screen bg-background bg-grid">
             {/* Sidebar */}
             <aside
-                className={`${sidebarOpen ? 'w-64' : 'w-20'} fixed h-full z-30 transition-all duration-300 ease-in-out bg-background border-r border-white/10`}
+                className={`${sidebarOpen ? 'w-72' : 'w-[88px]'} fixed h-full z-30 transition-all duration-300 ease-in-out bg-background/95 border-r border-white/10`}
             >
                 {/* Logo */}
                 <div className="flex items-center justify-between h-16 px-4 border-b border-white/10">
                     <div className="flex items-center gap-3">
                         <div className="relative">
-                            <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center">
+                            <div className="w-9 h-9 rounded-xl bg-primary/90 shadow-[0_0_0_3px_rgba(0,173,181,0.15)] flex items-center justify-center">
                                 <Wifi size={18} className="text-white" />
                             </div>
                             <div className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-success border-2 border-background" />
                         </div>
                         {sidebarOpen && (
                             <div className="animate-fade-in">
-                                <h1 className="text-sm font-bold text-primary leading-tight">NetGuard</h1>
+                                <h1 className="text-sm font-bold text-primary leading-tight tracking-wide">NetGuard</h1>
                                 <p className="text-small text-text-muted font-medium">Security Intelligence</p>
                             </div>
                         )}
@@ -91,7 +91,7 @@ export default function Layout({ children }) {
                 </div>
 
                 {/* Nav Links */}
-                <nav className="mt-4 px-3 space-y-1">
+                <nav className="mt-4 px-3 space-y-1.5">
                     {navItems.map((item) => {
                         const Icon = item.icon;
                         const isActive = location.pathname === item.path;
@@ -101,7 +101,7 @@ export default function Layout({ children }) {
                                 to={item.path}
                                 className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-body font-medium transition-colors duration-200 group ${isActive
                                     ? 'bg-primary/15 text-primary border border-primary/25'
-                                    : 'text-text-muted hover:text-text-primary hover:bg-white/5'
+                                    : 'text-text-muted hover:text-text-primary hover:bg-white/5 border border-transparent'
                                 }`}
                             >
                                 <Icon
@@ -148,10 +148,10 @@ export default function Layout({ children }) {
             </aside>
 
             {/* Main Content */}
-            <main className={`flex-1 ${sidebarOpen ? 'ml-64' : 'ml-20'} transition-all duration-300 overflow-y-auto`}>
+            <main className={`flex-1 ${sidebarOpen ? 'ml-72' : 'ml-[88px]'} transition-all duration-300 overflow-y-auto`}>
                 {/* Top Bar */}
                 <header
-                    className="sticky top-0 z-20 h-14 flex items-center justify-between px-8 bg-background/95 border-b border-white/10"
+                    className="sticky top-0 z-20 h-14 flex items-center justify-between px-8 bg-background/92 backdrop-blur border-b border-white/10"
                 >
                     <div className="flex items-center gap-3">
                         <Activity size={16} className="text-primary" />
@@ -190,7 +190,7 @@ export default function Layout({ children }) {
                 )}
 
                 {/* Page Content */}
-                <div className="p-8 animate-fade-in">
+                <div className="p-8 animate-fade-in max-w-[1600px]">
                     {children}
                 </div>
             </main>

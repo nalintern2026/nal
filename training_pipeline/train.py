@@ -17,9 +17,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier, IsolationForest
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 
-# Add project root to path
+# Add project root and backend to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
+sys.path.append(str(PROJECT_ROOT / "backend"))
 
 from core.feature_engineering import load_data, clean_data, preprocess_data, save_artifacts
 
@@ -34,6 +35,8 @@ MODELS_DIR = PROJECT_ROOT / "training_pipeline" / "models"
 SUPERVISED_MODEL_PATH = MODELS_DIR / "supervised" / "rf_model.pkl"
 UNSUPERVISED_MODEL_PATH = MODELS_DIR / "unsupervised" / "if_model.pkl"
 ARTIFACTS_DIR = MODELS_DIR / "artifacts"
+SCALER_PATH = ARTIFACTS_DIR / "scaler.pkl"
+FEATURE_NAMES_PATH = ARTIFACTS_DIR / "feature_names.pkl"
 CAPTURE_CACHE_DIR = PROJECT_ROOT / "training_pipeline" / "data" / "processed" / "captures_converted"
 
 
@@ -88,8 +91,12 @@ def _training_roots() -> list[Path]:
     return unique_roots
 
 
-def _discover_files(roots: list[Path]) -> tuple[list[Path], list[Path]]:
-    """Recursively discover csv and capture files across roots."""
+def _discover_files(
+    roots: list[Path],
+    exclude_dirs: set[str] | None = None,
+) -> tuple[list[Path], list[Path]]:
+    """Recursively discover csv and capture files across roots, skipping excluded dir names."""
+    exclude_dirs = {d.lower() for d in (exclude_dirs or set())}
     csv_files: list[Path] = []
     capture_files: list[Path] = []
     capture_exts = {".pcap", ".pcapng"}
@@ -99,6 +106,8 @@ def _discover_files(roots: list[Path]) -> tuple[list[Path], list[Path]]:
             continue
         for p in root.rglob("*"):
             if not p.is_file():
+                continue
+            if exclude_dirs and any(part.lower() in exclude_dirs for part in p.parts):
                 continue
             ext = p.suffix.lower()
             if ext == ".csv":
@@ -152,23 +161,130 @@ def _convert_captures_to_csv(capture_files: list[Path]) -> list[Path]:
     return out_csvs
 
 
+EXCLUDED_DIRS = {"Dooms'Day", "doomsday"}
+
+
+def _source_day(filepath: Path) -> str:
+    """Extract the day-of-week folder name from a CSV path (e.g. 'monday')."""
+    for part in filepath.parts:
+        if part.lower() in ("monday", "tuesday", "wednesday", "thursday", "friday"):
+            return part.lower()
+    return "unknown"
+
+
+def _pseudo_label_with_if(df: pd.DataFrame, day_labels: pd.Series) -> pd.Series:
+    """
+    Generate pseudo-labels using the existing trained Isolation Forest model.
+    - Monday flows → BENIGN (CIC-IDS 2017 Monday was normal-activity only)
+    - Other days → IF anomaly detection + infer_anomaly_threat_type for attack flows
+    """
+    from app.classification_config import infer_anomaly_threat_type
+
+    labels = pd.Series("BENIGN", index=df.index)
+
+    monday_mask = day_labels == "monday"
+    other_mask = ~monday_mask
+    logger.info(
+        f"Pseudo-labeling: {monday_mask.sum()} Monday (all BENIGN), "
+        f"{other_mask.sum()} other-day flows to classify."
+    )
+
+    if other_mask.sum() == 0:
+        return labels
+
+    if_model = None
+    old_scaler = None
+    old_feature_names = None
+    try:
+        with open(UNSUPERVISED_MODEL_PATH, "rb") as fh:
+            if_model = pickle.load(fh)
+        if SCALER_PATH.exists():
+            with open(SCALER_PATH, "rb") as fh:
+                old_scaler = pickle.load(fh)
+        if FEATURE_NAMES_PATH.exists():
+            with open(FEATURE_NAMES_PATH, "rb") as fh:
+                old_feature_names = pickle.load(fh)
+    except Exception as e:
+        logger.warning(f"Could not load existing IF/scaler for pseudo-labeling: {e}")
+
+    if if_model is None:
+        logger.warning(
+            "No existing IF model found. Cannot pseudo-label. "
+            "Labeling all non-Monday flows as BENIGN."
+        )
+        return labels
+
+    other_df = df.loc[other_mask].copy()
+    if old_feature_names is not None and len(old_feature_names) > 0:
+        for col in old_feature_names:
+            if col not in other_df.columns:
+                other_df[col] = 0
+        X_other = other_df[old_feature_names]
+    else:
+        X_other = other_df.select_dtypes(include=[np.number])
+
+    if old_scaler is not None:
+        X_scaled = old_scaler.transform(X_other)
+    else:
+        X_scaled = X_other.values
+
+    logger.info("Running IF predictions on non-Monday flows...")
+    anomaly_scores_raw = if_model.decision_function(X_scaled)
+    anomaly_scores = np.clip(0.5 - anomaly_scores_raw, 0, 1)
+    is_anomaly = if_model.predict(X_scaled) == -1
+
+    anomaly_positions = np.where(is_anomaly)[0]
+    logger.info(f"IF flagged {len(anomaly_positions)} anomalous flows out of {len(other_df)}.")
+
+    other_indices = other_df.index.to_numpy()
+    label_counts: dict[str, int] = {}
+    for iloc_pos in anomaly_positions:
+        anom_score = float(anomaly_scores[iloc_pos])
+        row = other_df.iloc[iloc_pos]
+        flow_features = {
+            "duration": row.get("flow_duration", 0),
+            "flow_bytes_per_sec": row.get("flow_byts_s", 0),
+            "flow_packets_per_sec": row.get("flow_pkts_s", 0),
+            "total_fwd_packets": row.get("tot_fwd_pkts", 0),
+            "total_bwd_packets": row.get("tot_bwd_pkts", 0),
+            "total_length_fwd": row.get("totlen_fwd_pkts", 0),
+            "total_length_bwd": row.get("totlen_bwd_pkts", 0),
+            "dst_port": row.get("dst_port", -1),
+            "src_port": row.get("src_port", -1),
+            "protocol": row.get("protocol", ""),
+            "syn_flag_cnt": row.get("syn_flag_cnt", 0),
+        }
+        threat_label = infer_anomaly_threat_type(flow_features, anom_score)
+        labels.iloc[other_indices[iloc_pos]] = threat_label
+        label_counts[threat_label] = label_counts.get(threat_label, 0) + 1
+
+    logger.info(
+        f"Pseudo-labeling complete: {len(anomaly_positions)} anomalous flows labeled. "
+        f"Distribution: {label_counts}"
+    )
+    return labels
+
+
 def get_training_data():
     """
     Load training data recursively from configured roots.
+    Excludes Dooms'Day folder. Adds pseudo-labels using existing IF model
+    when no Label column is present.
     Supports:
       - CSV files directly
       - pcap/pcapng (converted to CSV flows via cicflowmeter)
     Generates synthetic CSV only as final fallback when no data is discovered.
     """
     roots = _training_roots()
-    csv_files, capture_files = _discover_files(roots)
+    csv_files, capture_files = _discover_files(roots, exclude_dirs=EXCLUDED_DIRS)
     converted_csvs = _convert_captures_to_csv(capture_files)
     csv_files.extend(converted_csvs)
     # Deduplicate CSV paths
     csv_files = sorted({p.resolve() for p in csv_files})
     logger.info(
         f"Discovered training files from {len(roots)} roots: "
-        f"{len(csv_files)} CSVs (including converted), {len(capture_files)} captures."
+        f"{len(csv_files)} CSVs (including converted), {len(capture_files)} captures. "
+        f"(Excluded dirs: {EXCLUDED_DIRS})"
     )
     
     if not csv_files:
@@ -186,6 +302,7 @@ def get_training_data():
     logger.info(f"Loading {len(csv_files)} CSV files for training.")
 
     dfs = []
+    day_tags = []
     labeled_files = 0
     unlabeled_files = 0
     for f in csv_files:
@@ -195,14 +312,24 @@ def get_training_data():
             labeled_files += 1 if has_label else 0
             unlabeled_files += 0 if has_label else 1
             dfs.append(df)
+            day_tags.extend([_source_day(f)] * len(df))
     logger.info(
         f"Loaded datasets: labeled_files={labeled_files}, unlabeled_files={unlabeled_files}"
     )
 
     if not dfs:
         raise ValueError("No data loaded!")
-        
-    return pd.concat(dfs, ignore_index=True)
+
+    combined = pd.concat(dfs, ignore_index=True)
+    day_labels = pd.Series(day_tags, index=combined.index)
+
+    if "Label" not in combined.columns and unlabeled_files > 0:
+        logger.info("No Label column found. Generating pseudo-labels with existing IF model...")
+        combined["Label"] = _pseudo_label_with_if(combined, day_labels)
+        label_dist = combined["Label"].value_counts().to_dict()
+        logger.info(f"Final label distribution: {label_dist}")
+
+    return combined
 
 
 def train_supervised(X_train, y_train, X_test, y_test, label_encoder):
@@ -226,9 +353,19 @@ def train_supervised(X_train, y_train, X_test, y_test, label_encoder):
         pickle.dump(rf, f)
     logger.info(f"Supervised model saved to {SUPERVISED_MODEL_PATH}")
 
-    # Build metrics for API (Model Performance page)
     report = classification_report(y_test, y_pred, target_names=label_encoder.classes_, output_dict=True)
     cm = confusion_matrix(y_test, y_pred)
+
+    per_class = {}
+    for cls in label_encoder.classes_:
+        if cls in report:
+            per_class[cls] = {
+                "precision": float(report[cls]["precision"]),
+                "recall": float(report[cls]["recall"]),
+                "f1_score": float(report[cls]["f1-score"]),
+                "support": int(report[cls]["support"]),
+            }
+
     return {
         "name": "Random Forest",
         "accuracy": float(report["accuracy"]),
@@ -237,7 +374,7 @@ def train_supervised(X_train, y_train, X_test, y_test, label_encoder):
         "f1_score": float(report["macro avg"]["f1-score"]),
         "confusion_matrix": cm.tolist(),
         "classes": list(label_encoder.classes_),
-        "roc_auc": float(report["accuracy"]),  # RF has no ROC in this script; reuse accuracy as placeholder
+        "per_class": per_class,
     }
 
 
@@ -309,7 +446,13 @@ def main():
     
     # 5. Split Data
     if y is not None:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+        min_class_count = pd.Series(y).value_counts().min()
+        use_stratify = min_class_count >= 2
+        if not use_stratify:
+            logger.warning("Some classes have < 2 samples; disabling stratified split.")
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y if use_stratify else None
+        )
     else:
         logger.warning("No 'Label' column found in data. Skipping Supervised Training.")
         X_train, X_test = train_test_split(X, test_size=0.2, random_state=42)

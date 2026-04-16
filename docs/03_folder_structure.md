@@ -5,6 +5,7 @@
 ```text
 Network/
 ├── flows.db
+├── passive_timeline.db
 ├── temp_uploads/
 ├── nal/
 │   ├── backend/
@@ -13,10 +14,14 @@ Network/
 │   │       ├── main.py
 │   │       ├── db.py
 │   │       ├── classification_config.py
+│   │       ├── osint_routes.py
 │   │       └── services/
 │   │           ├── decision_service.py
 │   │           ├── realtime_service.py
+│   │           ├── osint.py
+│   │           ├── threat_feeds.py
 │   │           └── sbom_service.py
+│   │   └── workers/
 │   ├── core/
 │   │   └── feature_engineering.py
 │   ├── frontend/
@@ -56,16 +61,19 @@ Network/
 │   ├── security/
 │   │   └── sbom.json
 │   ├── docs/
+│   ├── results/
+│   ├── temp_processing/
+│   ├── tests/
 │   ├── requirements.txt
 │   ├── docker-compose.yml
 │   ├── .env.example
 │   └── test_upload.sh
-└── docs/
 ```
 
 ## Directory Purpose Notes
 
 - `Network/flows.db`: runtime SQLite store for all flow and analysis metadata used by backend/frontend.
+- `Network/passive_timeline.db`: dedicated timeline store for passive dashboard trend bars.
 - `Network/temp_uploads`: transient upload staging path used during API processing.
 - `nal/backend`: API layer and orchestration logic.
 - `nal/core`: shared preprocessing utilities consumed in both training and inference.
@@ -73,8 +81,7 @@ Network/
 - `nal/n8n`: automation definitions and import utility.
 - `nal/training_pipeline`: training orchestration, dataset tooling, and model artifact generation.
 - `nal/security/sbom.json`: existing CycloneDX-style SBOM artifact in repository.
-- `nal/docs`: pre-existing project docs inside `nal` (separate from root `docs` requested in this task).
-- `docs` (root): consolidated technical documentation for this repository.
+- `nal/docs`: project documentation.
 
 ## Important Large/Generated Areas
 

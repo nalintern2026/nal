@@ -1,11 +1,13 @@
 # API Reference
 
-Base URL (local): `http://localhost:8000/api`
+Base URL (local): `http://127.0.0.1:8000/api` (equivalent to `http://localhost:8000/api`)
 
 ## Health and System
 
 - `GET /health`
   - **Response:** status, timestamp, model/service states.
+- `GET /` (root, outside `/api`)
+  - **Response:** API metadata (`message`, `docs`, `version`).
 
 ## Dashboard and Analytics
 
@@ -45,6 +47,13 @@ Base URL (local): `http://localhost:8000/api`
 - `POST /realtime/stop`
 - `GET /realtime/status`
 - `GET /realtime/interfaces`
+- `GET /threat-feeds/status`
+
+## OSINT Validation
+
+- `GET /osint/flows`
+  - **Query params:** `page`, `per_page`, `src_ip`, `monitor_type`.
+  - **Response:** paginated flow list where OSINT enrichment is present.
 
 ## Model and Classification Metadata
 
@@ -66,7 +75,7 @@ Base URL (local): `http://localhost:8000/api`
 ### Upload request (curl)
 
 ```bash
-curl -X POST -F "file=@capture.pcap" http://localhost:8000/api/upload
+curl -X POST -F "file=@capture.pcap" http://127.0.0.1:8000/api/upload
 ```
 
 ### Upload response shape (abbreviated)

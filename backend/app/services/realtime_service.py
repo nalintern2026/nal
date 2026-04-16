@@ -331,6 +331,11 @@ class RealtimeMonitor:
         self._lock = threading.Lock()
         self._capture_count = 0
         self._last_flow_count = 0
+        self._session_id: Optional[str] = None
+        self._session_start: Optional[str] = None
+        self._session_total_flows = 0
+        self._session_anomaly_count = 0
+        self._session_risk_sum = 0.0
 
     def start(self, interface: str) -> None:
         """Start monitoring in background thread."""
@@ -339,18 +344,44 @@ class RealtimeMonitor:
                 return
             self.running = True
             self.interface = interface or None
+            self._session_id = f"active-{uuid.uuid4().hex[:8]}"
+            self._session_start = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+            self._session_total_flows = 0
+            self._session_anomaly_count = 0
+            self._session_risk_sum = 0.0
             self._thread = threading.Thread(
                 target=self._run,
                 args=(interface,),
                 daemon=True,
             )
             self._thread.start()
-            logger.info(f"Realtime monitor started on interface: {interface or 'default'}")
+            logger.info(f"Realtime monitor started: session={self._session_id} interface={interface or 'default'}")
 
     def stop(self) -> None:
-        """Stop monitoring."""
+        """Stop monitoring and persist session to analysis history."""
+        session_id = None
         with self._lock:
             self.running = False
+            session_id = self._session_id
+        if session_id and self._session_total_flows > 0:
+            try:
+                from app import db
+                avg_risk = self._session_risk_sum / max(self._session_total_flows, 1)
+                db.insert_analysis(
+                    analysis_id=session_id,
+                    filename="Active Monitoring Session",
+                    monitor_type="active",
+                    file_size=None,
+                    total_flows=self._session_total_flows,
+                    anomaly_count=self._session_anomaly_count,
+                    avg_risk_score=avg_risk,
+                    attack_distribution={},
+                    risk_distribution={},
+                    report_details={},
+                )
+                logger.info(f"Saved active session {session_id}: {self._session_total_flows} flows, {self._session_anomaly_count} anomalies")
+            except Exception as e:
+                logger.error(f"Failed to save active session history: {e}")
         logger.info("Realtime monitor stopped")
 
     def _run(self, interface: str) -> None:
@@ -377,13 +408,18 @@ class RealtimeMonitor:
 
                 for f in enriched:
                     f["monitor_type"] = "active"
-                    f["analysis_id"] = None
+                    f["analysis_id"] = self._session_id
                     f["upload_filename"] = "realtime"
                     f["id"] = str(uuid.uuid4())[:8]
                     f["timestamp"] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
 
                 db.insert_flows(enriched, monitor_type="active")
-                logger.info(f"Inserted {len(enriched)} active flows from {len(packets)} packets")
+
+                self._session_total_flows += len(enriched)
+                self._session_anomaly_count += sum(1 for f in enriched if f.get("is_anomaly"))
+                self._session_risk_sum += sum(float(f.get("risk_score", 0) or 0) for f in enriched)
+
+                logger.info(f"Inserted {len(enriched)} active flows (session {self._session_id}) from {len(packets)} packets")
 
             except Exception as e:
                 logger.error(f"Realtime monitor loop error: {e}", exc_info=True)

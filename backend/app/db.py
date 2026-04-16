@@ -102,6 +102,10 @@ def init_db():
             cursor.execute("ALTER TABLE flows ADD COLUMN abuse_ok BOOLEAN")
         if "vt_ok" not in existing_columns:
             cursor.execute("ALTER TABLE flows ADD COLUMN vt_ok BOOLEAN")
+        if "feed_score" not in existing_columns:
+            cursor.execute("ALTER TABLE flows ADD COLUMN feed_score REAL")
+        if "feed_sources" not in existing_columns:
+            cursor.execute("ALTER TABLE flows ADD COLUMN feed_sources TEXT")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_timestamp ON flows(timestamp DESC);
@@ -343,6 +347,24 @@ def get_analysis_history(limit: int = 100, monitor_type: Optional[str] = None) -
                 GROUP BY analysis_id
             """)
             fallback_rows = cursor.fetchall()
+
+        # Fallback for active flows: they may have analysis_id (session-based) or NULL (legacy).
+        # Group legacy NULL-id active flows by date to create synthetic session entries.
+        active_fallback_rows = []
+        if not monitor_type or str(monitor_type).strip().lower() == "active":
+            cursor.execute("""
+                SELECT COALESCE(analysis_id, 'active-' || DATE(timestamp)) as analysis_id,
+                       'realtime' as filename,
+                       MIN(timestamp) as uploaded_at, COUNT(*) as total_flows,
+                       SUM(CASE WHEN is_anomaly THEN 1 ELSE 0 END) as anomaly_count,
+                       AVG(risk_score) as avg_risk_score
+                FROM flows
+                WHERE LOWER(COALESCE(monitor_type, '')) = 'active'
+                  AND (analysis_id IS NULL OR analysis_id = ''
+                       OR analysis_id NOT IN (SELECT analysis_id FROM analysis_history))
+                GROUP BY COALESCE(analysis_id, 'active-' || DATE(timestamp))
+            """)
+            active_fallback_rows = cursor.fetchall()
         conn.close()
 
     seen_ids = set()
@@ -377,8 +399,40 @@ def get_analysis_history(limit: int = 100, monitor_type: Optional[str] = None) -
         r["report_details"] = {}
         result.append(r)
 
+    for row in active_fallback_rows:
+        r = dict(row)
+        if r["analysis_id"] in seen_ids:
+            continue
+        seen_ids.add(r["analysis_id"])
+        r["filename"] = "Active Monitoring Session"
+        r["monitor_type"] = "active"
+        r["file_size"] = None
+        r["attack_distribution"] = {}
+        r["risk_distribution"] = {}
+        r["report_details"] = {}
+        result.append(r)
+
     result.sort(key=lambda x: x.get("uploaded_at") or "", reverse=True)
     return result[:limit]
+
+
+def _get_active_flows_by_date(date_str: str, limit: int = 500) -> List[Dict[str, Any]]:
+    """Fetch active monitoring flows for a given date (YYYY-MM-DD), used for synthetic session IDs."""
+    with db_lock:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM flows
+            WHERE LOWER(COALESCE(monitor_type, '')) = 'active'
+              AND (analysis_id IS NULL OR analysis_id = '')
+              AND DATE(timestamp) = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (date_str, limit))
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+    return rows
 
 
 def get_analysis_report(analysis_id: str) -> Optional[Dict[str, Any]]:
@@ -398,23 +452,47 @@ def get_analysis_report(analysis_id: str) -> Optional[Dict[str, Any]]:
         row = cursor.fetchone()
 
         if not row:
-            # Fallback: build from flows if we have flows but no history (pre-feature uploads)
-            cursor.execute(
-                "SELECT COUNT(*) as cnt, AVG(risk_score) as avg_risk FROM flows WHERE analysis_id = ?",
-                (aid,),
-            )
-            flow_row = cursor.fetchone()
-            if flow_row and flow_row["cnt"] and flow_row["cnt"] > 0:
+            # Check if this is a synthetic active session ID (e.g. "active-2026-04-13")
+            is_active_synthetic = aid.startswith("active-") and len(aid) == len("active-YYYY-MM-DD")
+            if is_active_synthetic:
+                date_part = aid[len("active-"):]
                 cursor.execute(
-                    "SELECT upload_filename, MIN(timestamp) as ts FROM flows WHERE analysis_id = ?",
+                    """SELECT COUNT(*) as cnt, AVG(risk_score) as avg_risk FROM flows
+                       WHERE LOWER(COALESCE(monitor_type, '')) = 'active'
+                         AND (analysis_id IS NULL OR analysis_id = '')
+                         AND DATE(timestamp) = ?""",
+                    (date_part,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt, AVG(risk_score) as avg_risk FROM flows WHERE analysis_id = ?",
                     (aid,),
                 )
-                fn_row = cursor.fetchone()
-                filename = (fn_row and fn_row["upload_filename"]) or "Unknown"
+            flow_row = cursor.fetchone()
+            if flow_row and flow_row["cnt"] and flow_row["cnt"] > 0:
+                if is_active_synthetic:
+                    cursor.execute(
+                        """SELECT MIN(timestamp) as ts FROM flows
+                           WHERE LOWER(COALESCE(monitor_type, '')) = 'active'
+                             AND (analysis_id IS NULL OR analysis_id = '')
+                             AND DATE(timestamp) = ?""",
+                        (date_part,),
+                    )
+                    fn_row = cursor.fetchone()
+                    filename = "Active Monitoring Session"
+                    mt_label = "active"
+                else:
+                    cursor.execute(
+                        "SELECT upload_filename, MIN(timestamp) as ts FROM flows WHERE analysis_id = ?",
+                        (aid,),
+                    )
+                    fn_row = cursor.fetchone()
+                    filename = (fn_row and fn_row["upload_filename"]) or "Unknown"
+                    mt_label = "Static Monitoring"
                 meta = {
                     "analysis_id": aid,
                     "filename": filename,
-                    "monitor_type": "Static Monitoring",
+                    "monitor_type": mt_label,
                     "uploaded_at": (fn_row and fn_row["ts"]) or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z',
                     "file_size": None,
                     "total_flows": flow_row["cnt"],
@@ -424,21 +502,30 @@ def get_analysis_report(analysis_id: str) -> Optional[Dict[str, Any]]:
                     "risk_distribution": "{}",
                     "report_details": "{}",
                 }
+                if is_active_synthetic:
+                    flow_filter = """LOWER(COALESCE(monitor_type, '')) = 'active'
+                                     AND (analysis_id IS NULL OR analysis_id = '')
+                                     AND DATE(timestamp) = ?"""
+                    filter_param = (date_part,)
+                else:
+                    flow_filter = "analysis_id = ?"
+                    filter_param = (aid,)
+
                 cursor.execute(
-                    "SELECT classification, COUNT(*) as c FROM flows WHERE analysis_id = ? GROUP BY classification",
-                    (aid,),
+                    f"SELECT classification, COUNT(*) as c FROM flows WHERE {flow_filter} GROUP BY classification",
+                    filter_param,
                 )
                 attack_dist = {r["classification"] or "Unknown": r["c"] for r in cursor.fetchall()}
                 cursor.execute(
-                    "SELECT risk_level, COUNT(*) as c FROM flows WHERE analysis_id = ? GROUP BY risk_level",
-                    (aid,),
+                    f"SELECT risk_level, COUNT(*) as c FROM flows WHERE {flow_filter} GROUP BY risk_level",
+                    filter_param,
                 )
                 risk_dist = {r["risk_level"] or "Low": r["c"] for r in cursor.fetchall()}
                 meta["attack_distribution"] = json.dumps(attack_dist)
                 meta["risk_distribution"] = json.dumps(risk_dist)
                 cursor.execute(
-                    "SELECT SUM(CASE WHEN is_anomaly THEN 1 ELSE 0 END) as anom FROM flows WHERE analysis_id = ?",
-                    (aid,),
+                    f"SELECT SUM(CASE WHEN is_anomaly THEN 1 ELSE 0 END) as anom FROM flows WHERE {flow_filter}",
+                    filter_param,
                 )
                 meta["anomaly_count"] = cursor.fetchone()["anom"] or 0
             else:
@@ -460,7 +547,13 @@ def get_analysis_report(analysis_id: str) -> Optional[Dict[str, Any]]:
     except (TypeError, json.JSONDecodeError):
         meta["report_details"] = {}
 
-    flows, total = get_flows(analysis_id=aid, page=1, per_page=500)
+    is_active_synthetic = aid.startswith("active-") and len(aid) == len("active-YYYY-MM-DD")
+    if is_active_synthetic:
+        date_part = aid[len("active-"):]
+        flows = _get_active_flows_by_date(date_part, limit=500)
+        total = len(flows)
+    else:
+        flows, total = get_flows(analysis_id=aid, page=1, per_page=500)
     return {
         "id": meta["analysis_id"],
         "filename": meta["filename"],
@@ -500,8 +593,8 @@ def insert_flows(flows: List[Dict[str, Any]], monitor_type: str = "passive") -> 
                         classification, threat_type, cve_refs, classification_reason,
                         confidence, anomaly_score, risk_score, risk_level, is_anomaly, monitor_type,
                         osint_ip, abuse_score, vt_score, final_score, final_verdict,
-                        osint_error, abuse_ok, vt_ok
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        osint_error, abuse_ok, vt_ok, feed_score, feed_sources
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     flow.get('id'),
                     flow.get('analysis_id'),
@@ -537,6 +630,8 @@ def insert_flows(flows: List[Dict[str, Any]], monitor_type: str = "passive") -> 
                     flow.get('osint_error'),
                     flow.get('abuse_ok'),
                     flow.get('vt_ok'),
+                    flow.get('feed_score'),
+                    flow.get('feed_sources'),
                 ))
                 inserted += 1
             except Exception as e:

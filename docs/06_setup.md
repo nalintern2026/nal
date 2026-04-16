@@ -44,7 +44,7 @@ Use `nal/.env.example` as baseline:
 
 ### Frontend
 
-- `VITE_API_URL` (defaults to `http://localhost:8000/api` in `api.js` if not set).
+- `VITE_API_URL` (defaults to `http://127.0.0.1:8000/api` in `api.js` if not set).
 
 ## External Services
 

@@ -66,6 +66,7 @@ flowchart TD
   H --> K[Risk + threat enrichment]
   J --> K
   K --> L[(SQLite flows.db)]
+  L --> O[(passive_timeline.db)]
   L --> M[Dashboard and analytics APIs]
   M --> N[React pages + n8n workflows]
 ```

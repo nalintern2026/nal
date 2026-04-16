@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getDashboardStats } from '../services/api';
+import { SectionHeading, TogglePills } from '../components/Primitives';
 import {
     Activity,
     AlertTriangle,
@@ -131,26 +132,14 @@ export default function Dashboard() {
             <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div className="flex items-center gap-2">
                     <span className="text-small font-medium text-text-muted uppercase tracking-wider">View</span>
-                    <div className="flex rounded-xl bg-surface border border-white/10 p-0.5">
-                        <button
-                            type="button"
-                            onClick={() => setMonitorView('passive')}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${monitorView === 'passive'
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Passive
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setMonitorView('active')}
-                            className={`px-4 py-2 rounded-lg text-body font-medium transition-colors ${monitorView === 'active'
-                                ? 'bg-primary/15 text-primary border border-primary/30'
-                                : 'text-text-muted hover:text-text-primary'}`}
-                        >
-                            Active
-                        </button>
-                    </div>
+                    <TogglePills
+                        value={monitorView}
+                        onChange={setMonitorView}
+                        options={[
+                            { value: 'passive', label: 'Passive' },
+                            { value: 'active', label: 'Active' },
+                        ]}
+                    />
                     <span className="text-small text-text-muted">
                         {monitorView === 'passive' ? 'File uploads' : 'Live monitoring'}
                     </span>
@@ -167,25 +156,26 @@ export default function Dashboard() {
                         disabled={refreshing}
                         className="px-4 py-2.5 rounded-[10px] border border-primary text-primary text-body font-medium hover:bg-primary/10 transition-colors disabled:opacity-50"
                     >
-                        {refreshing ? '⟳ Refreshing...' : '🔄 Refresh'}
+                        {refreshing ? 'Refreshing...' : 'Refresh'}
                     </button>
                 </div>
             </div>
 
             {/* Header */}
-            <div className="flex justify-between items-center">
-                <h1 className="text-h1 font-bold text-primary">Network Dashboard</h1>
-            </div>
+            <SectionHeading
+                title="Network Dashboard"
+                subtitle="Real-time and uploaded traffic intelligence in one view"
+            />
 
             {error && (
                 <div className="glass-card p-4 border-danger/30 bg-danger/10">
-                    <p className="text-danger text-body">⚠️ {error}</p>
+                    <p className="text-danger text-body">{error}</p>
                 </div>
             )}
 
             {statsData.total_flows === 0 && !error && (
                 <div className="glass-card p-8 text-center border-warning/30 bg-warning/10">
-                    <p className="text-warning mb-2">📤 No data yet</p>
+                    <p className="text-warning mb-2">No data yet</p>
                     <p className="text-body text-text-muted">
                         {monitorView === 'passive'
                             ? 'Upload a network file on the Upload page to see analysis results here.'
@@ -202,7 +192,7 @@ export default function Dashboard() {
                     value={statsData.total_flows.toLocaleString()}
                     icon={Activity}
                     color="cyan"
-                    trend="+12.5%"
+                    trend={monitorView === 'active' ? 'Live stream' : 'Uploaded'}
                     trendUp={true}
                 />
                 <KPICard

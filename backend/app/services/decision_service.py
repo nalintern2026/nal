@@ -423,33 +423,47 @@ class DecisionEngine:
                             row["abuse_score"] = osint.abuse_score
                             row["vt_ok"] = bool(osint.vt_ok)
                             row["vt_score"] = osint.vt_score
+                            row["feed_score"] = osint.feed_score
+                            row["feed_sources"] = osint.feed_sources
                             row["osint_error"] = osint.error
 
-                            # Correctness: if both OSINT providers failed/unavailable, don't pretend scores are 0.
-                            if not osint.abuse_ok and not osint.vt_ok:
-                                row["final_score"] = None
-                                row["final_verdict"] = "OSINT Unavailable"
-                            else:
-                                final_score = compute_final_score(ml_confidence, osint.abuse_score, osint.vt_score)
+                            has_any_osint = osint.abuse_ok or osint.vt_ok or osint.feed_score > 0
+                            if not has_any_osint:
+                                rf_conf = conf if conf is not None else 0.0
+                                final_score, osint_has_data = compute_final_score(
+                                    ml_confidence, osint.abuse_score, osint.vt_score,
+                                    rf_confidence=rf_conf, feed_score=osint.feed_score,
+                                )
                                 row["final_score"] = final_score
-                                row["final_verdict"] = osint_verdict_from_final_score(final_score)
+                                row["final_verdict"] = osint_verdict_from_final_score(final_score, osint_has_data)
+                            else:
+                                rf_conf = conf if conf is not None else 0.0
+                                final_score, osint_has_data = compute_final_score(
+                                    ml_confidence, osint.abuse_score, osint.vt_score,
+                                    rf_confidence=rf_conf, feed_score=osint.feed_score,
+                                )
+                                row["final_score"] = final_score
+                                row["final_verdict"] = osint_verdict_from_final_score(final_score, osint_has_data)
                             if row.get("final_verdict"):
                                 logger.info(
-                                    "OSINT verdict: ip=%s ml_anom=%.3f abuse=%s vt=%s final=%.1f verdict=%s",
+                                    "OSINT verdict: ip=%s ml_anom=%.3f rf_conf=%.3f abuse=%s vt=%s feeds=%.0f final=%.1f verdict=%s",
                                     row["osint_ip"],
                                     anom_score,
+                                    conf if conf is not None else 0.0,
                                     str(row.get("abuse_score")),
                                     str(row.get("vt_score")),
+                                    osint.feed_score,
                                     float(row["final_score"] or 0.0),
                                     row.get("final_verdict"),
                                 )
                         else:
-                            # No public IP to check (private/reserved).
                             row["osint_ip"] = None
                             row["abuse_ok"] = False
                             row["abuse_score"] = None
                             row["vt_ok"] = False
                             row["vt_score"] = None
+                            row["feed_score"] = 0.0
+                            row["feed_sources"] = ""
                             row["osint_error"] = "no public ip (skipped)"
                             row["final_score"] = None
                             row["final_verdict"] = "OSINT Skipped"
@@ -805,20 +819,24 @@ class DecisionEngine:
                     row["abuse_score"] = osint.abuse_score
                     row["vt_ok"] = bool(osint.vt_ok)
                     row["vt_score"] = osint.vt_score
+                    row["feed_score"] = osint.feed_score
+                    row["feed_sources"] = osint.feed_sources
                     row["osint_error"] = osint.error
-                    if not osint.abuse_ok and not osint.vt_ok:
-                        row["final_score"] = None
-                        row["final_verdict"] = "OSINT Unavailable"
-                    else:
-                        final_score = compute_final_score(ml_confidence, osint.abuse_score, osint.vt_score)
-                        row["final_score"] = final_score
-                        row["final_verdict"] = osint_verdict_from_final_score(final_score)
+                    rf_conf = conf if conf is not None else 0.0
+                    final_score, osint_has_data = compute_final_score(
+                        ml_confidence, osint.abuse_score, osint.vt_score,
+                        rf_confidence=rf_conf, feed_score=osint.feed_score,
+                    )
+                    row["final_score"] = final_score
+                    row["final_verdict"] = osint_verdict_from_final_score(final_score, osint_has_data)
                 else:
                     row["osint_ip"] = None
                     row["abuse_ok"] = False
                     row["abuse_score"] = None
                     row["vt_ok"] = False
                     row["vt_score"] = None
+                    row["feed_score"] = 0.0
+                    row["feed_sources"] = ""
                     row["osint_error"] = "no public ip (skipped)"
                     row["final_score"] = None
                     row["final_verdict"] = "OSINT Skipped"
