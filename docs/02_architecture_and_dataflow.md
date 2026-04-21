@@ -3,32 +3,26 @@
 ## System Architecture (Text Diagram)
 
 ```text
-                +-------------------------+
-                |      React Frontend     |
-                |  (pages + api.js layer) |
-                +------------+------------+
-                             |
-                             | HTTP (/api/*, x-api-key)
-                             v
-                +-------------------------+
-                |      FastAPI Backend    |
-                |        app/main.py      |
-                +------------+------------+
-                             |
-       +---------------------+----------------------+
-       |                     |                      |
-       v                     v                      v
-[Decision Service]   [Realtime Service]    [SBOM/Integrity/OSINT]
-  RF + IF infer       packet->flows          threat feeds, checks
-       |                     |                      |
-       +----------+----------+                      |
-                  |                                 |
-                  v                                 v
-            [Queue Service] <---- Redis (optional) / fallback in-process queue
-                  |
-                  v
-             [DB Layer]
-        flows.db + passive_timeline.db
+ flowchart TD
+
+    A[React Frontend<br/>(pages + api.js layer)]
+    B[FastAPI Backend<br/>app/main.py]
+
+    A -->|HTTP /api/*<br/>x-api-key| B
+
+    B --> C[Decision Service<br/>RF + IF Inference]
+    B --> D[Realtime Service<br/>Packet → Flows]
+    B --> E[SBOM / Integrity / OSINT<br/>Threat Feeds & Checks]
+
+    C --> F[Queue Service]
+    D --> F
+    E --> F
+
+    F -->|Redis (optional)| G[(Redis Queue)]
+    F -->|Fallback| H[(In-Process Queue)]
+
+    G --> I[DB Layer<br/>flows.db + passive_timeline.db]
+    H --> I
 ```
 
 ## Backend Structure (FastAPI Services)
