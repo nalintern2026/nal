@@ -5,14 +5,14 @@
 ```mermaid
 flowchart TD
 
-    A[React Frontend<br/>(pages + api.js layer)]
-    B[FastAPI Backend<br/>app/main.py]
+    A[React Frontend\n(pages + api.js layer)]
+    B[FastAPI Backend\napp/main.py]
 
-    A -->|HTTP /api/*<br/>x-api-key| B
+    A -->|HTTP /api/*\nx-api-key| B
 
-    B --> C[Decision Service<br/>RF + IF Inference]
-    B --> D[Realtime Service<br/>Packet → Flows]
-    B --> E[SBOM / Integrity / OSINT<br/>Threat Feeds & Checks]
+    B --> C[Decision Service\nRF + IF Inference]
+    B --> D[Realtime Service\nPacket to Flows]
+    B --> E[SBOM / Integrity / OSINT\nThreat Feeds and Checks]
 
     C --> F[Queue Service]
     D --> F
@@ -21,7 +21,7 @@ flowchart TD
     F -->|Redis (optional)| G[(Redis Queue)]
     F -->|Fallback| H[(In-Process Queue)]
 
-    G --> I[DB Layer<br/>flows.db + passive_timeline.db]
+    G --> I[DB Layer\nflows.db + passive_timeline.db]
     H --> I
 Backend Structure (FastAPI Services)
 
