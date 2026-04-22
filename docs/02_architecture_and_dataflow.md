@@ -1,115 +1,193 @@
+````md
 # Architecture and Dataflow
 
-## System Architecture (Text Diagram)
+## System Architecture (Diagram)
 
-```text
-                +-------------------------+
-                |      React Frontend     |
-                |  (pages + api.js layer) |
-                +------------+------------+
-                             |
-                             | HTTP (/api/*, x-api-key)
-                             v
-                +-------------------------+
-                |      FastAPI Backend    |
-                |        app/main.py      |
-                +------------+------------+
-                             |
-       +---------------------+----------------------+
-       |                     |                      |
-       v                     v                      v
-[Decision Service]   [Realtime Service]    [SBOM/Integrity/OSINT]
-  RF + IF infer       packet->flows          threat feeds, checks
-       |                     |                      |
-       +----------+----------+                      |
-                  |                                 |
-                  v                                 v
-            [Queue Service] <---- Redis (optional) / fallback in-process queue
-                  |
-                  v
-             [DB Layer]
-        flows.db + passive_timeline.db
-```
+```mermaid
+flowchart TD
+    A[React Frontend - Pages & API Layer]
+    B[FastAPI Backend - Main App]
+
+    A --> B
+
+    B --> C[Decision Service (RF + IF)]
+    B --> D[Realtime Service (Packets → Flows)]
+    B --> E[OSINT & Integrity Services]
+
+    C --> F[Queue Service]
+    D --> F
+    E --> F
+
+    F --> G[Redis Queue]
+    F --> H[In-Process Queue]
+
+    G --> I[Database Layer]
+    H --> I
+````
+
+---
 
 ## Backend Structure (FastAPI Services)
 
-Main orchestration is in `backend/app/main.py`. Core backend responsibilities are split as:
+Main orchestration is in:
 
-- `decision_service.py`: inference, scoring, enrichment, alert trigger.
-- `realtime_service.py`: packet capture and active flow generation.
-- `queue_service.py`: Redis queue + fallback enqueue path.
-- `flow_queue.py`: in-process queue worker fallback.
-- `db.py`: schema initialization, query helpers, persistence APIs.
-- `osint.py`: AbuseIPDB/VT + feed-aware score fusion.
-- `threat_feeds.py`: periodic local feed refresh + matching.
-- `sbom_service.py`: dependency parsing + OSV vulnerability lookup.
-- `integrity_service.py` and `model_integrity.py`: runtime integrity checks.
+`backend/app/main.py`
+
+Core backend responsibilities:
+
+* **decision_service.py**
+  Inference, scoring, enrichment, alert triggering
+
+* **realtime_service.py**
+  Packet capture and active flow generation
+
+* **queue_service.py**
+  Redis queue + fallback enqueue path
+
+* **flow_queue.py**
+  In-process queue worker fallback
+
+* **db.py**
+  Schema initialization, query helpers, persistence APIs
+
+* **osint.py**
+  AbuseIPDB / VirusTotal + feed-aware score fusion
+
+* **threat_feeds.py**
+  Periodic local feed refresh + matching
+
+* **sbom_service.py**
+  Dependency parsing + OSV vulnerability lookup
+
+* **integrity_service.py & model_integrity.py**
+  Runtime integrity checks
+
+---
 
 ## Frontend Structure (React + API Layer)
 
-- Router and layout shell: `frontend/src/App.jsx`, `components/Layout.jsx`.
-- API abstraction: `frontend/src/services/api.js`.
-- Page modules:
-  - `Dashboard`, `Upload`, `History`, `TrafficAnalysis`, `Anomalies`
-  - `OSINTValidation`, `ModelPerformance`, `ActiveMonitoring`
-  - `IntegrityDashboard`, `Alerts`, `Cases`, `SBOMSecurity`
+* **Router & Layout**
 
-The frontend relies on backend envelope-style responses for most routes and uses `friendlyMessage` for normalized error display.
+  * `frontend/src/App.jsx`
+  * `components/Layout.jsx`
+
+* **API Abstraction**
+
+  * `frontend/src/services/api.js`
+
+### Page Modules
+
+* Dashboard
+* Upload
+* History
+* TrafficAnalysis
+* Anomalies
+* OSINTValidation
+* ModelPerformance
+* ActiveMonitoring
+* IntegrityDashboard
+* Alerts
+* Cases
+* SBOMSecurity
+
+📌 The frontend relies on backend envelope-style responses and uses
+`friendlyMessage` for normalized error handling.
+
+---
 
 ## Database Design Overview
 
-Main operational DB (`flows.db`) includes:
+### Main Operational DB (`flows.db`)
 
-- `flows`: enriched per-flow records (ML + OSINT + CVE + explanation + monitor type).
-- `upload_jobs`: async upload state and result summary.
-- `analysis_history`: metadata for passive and active sessions.
-- `alerts`: correlated alerts with status/priority/correlation fields.
-- `cases` and `case_alerts`: incident workflow and alert linkage.
-- `model_versions`: model version lifecycle state.
+* **flows**
+  Enriched per-flow records (ML + OSINT + CVE + explanation + monitor type)
 
-Secondary DB (`passive_timeline.db`) includes:
+* **upload_jobs**
+  Async upload state and result summary
 
-- `passive_upload_points`: passive timeline points for dashboard rendering.
+* **analysis_history**
+  Metadata for passive and active sessions
+
+* **alerts**
+  Correlated alerts with:
+
+  * status
+  * priority
+  * occurrence count
+  * lifecycle fields
+
+* **cases**
+  Incident/case records (title, description, status)
+
+* **case_alerts**
+  Mapping between cases and alerts
+
+* **model_versions**
+  Model version lifecycle state
+
+---
+
+### Secondary DB (`passive_timeline.db`)
+
+* **passive_upload_points**
+  Timeline points for dashboard visualization
+
+---
 
 ## Ingestion Pipelines
 
-## Passive Upload Flow
+### Passive Upload Flow
 
-1. `POST /api/upload` streams file to temp storage.
-2. Upload job row is created with `QUEUED`.
-3. Background task executes file analysis in chunks.
-4. Chunk callback enqueues flow batches (`monitor_type=passive`).
-5. Summary + history are persisted; job becomes `COMPLETED`/`FAILED`.
-6. Upload UI polls job endpoint or handles direct-result mode.
+1. `POST /api/upload` streams file to temporary storage
+2. Upload job created with **QUEUED** status
+3. Background processing reads file in chunks
+4. Flow batches enqueued (`monitor_type = passive`)
+5. Summary + analysis history stored
+6. Job status → **COMPLETED / FAILED**
+7. Frontend retrieves via polling or direct response
 
-## Active Realtime Flow
+---
 
-1. `POST /api/realtime/start` starts capture loop.
-2. Packet windows are converted to flow-like feature rows.
-3. Batches are classified/enriched and enqueued (`monitor_type=active`).
-4. `POST /api/realtime/stop` ends loop and persists session summary.
-5. Dashboard/history reflect active-session data.
+### Active Realtime Flow
+
+1. `POST /api/realtime/start` → starts packet capture
+2. Packets converted into flow-based feature records
+3. Flow batches classified & enriched (`monitor_type = active`)
+4. `POST /api/realtime/stop` → stops capture
+5. Session summary stored
+6. Dashboard + history updated
+
+---
 
 ## Queue-Based Processing
 
-- Preferred backend: Redis list queue (`netguard:flow_batches`) with consumer retry.
-- Fallback backend: daemon in-process `queue.Queue(maxsize=200)`.
-- Insert target for both: `db.insert_flows(...)`.
-- Queue status appears in health/integrity outputs.
+* **Preferred:** Redis queue (`netguard:flow_batches`) with retry mechanism
+* **Fallback:** In-process queue (`queue.Queue(maxsize=200)`)
+
+Both pipelines insert into:
+
+`db.insert_flows(...)`
+
+📌 Queue health is exposed via system integrity endpoints
+
+---
 
 ## Decision Pipeline Dataflow
 
-```text
-Packets/CSV/PCAP
-    -> feature extraction/normalization
-    -> RF classification + confidence
-    -> IF anomaly scoring
-    -> threat-type + CVE mapping
-    -> OSINT + threat-feed enrichment (for anomalies)
-    -> fused final score + verdict
-    -> risk level + explanation
-    -> queue enqueue
-    -> SQLite persistence
-    -> alert correlation/update
-    -> frontend visualization
+```
+Packets / CSV / PCAP
+    → Feature Extraction & Normalization
+    → Random Forest Classification + Confidence
+    → Isolation Forest Anomaly Scoring
+    → Threat Type & CVE Mapping
+    → OSINT + Threat Feed Enrichment (for anomalies)
+    → Fused Final Score & Verdict
+    → Risk Level & Explanation
+    → Queue Enqueue
+    → Database Persistence (SQLite)
+    → Alert Correlation & Update
+    → Frontend Visualization
+```
+
+```
 ```
