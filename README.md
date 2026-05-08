@@ -14,7 +14,7 @@ NetGuard is a full-stack network traffic security analysis platform in this repo
 ## Minimal Setup
 
 ```bash
-cd /home/ictd/Desktop/Network/nal
+cd nal
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -28,7 +28,7 @@ npm install
 Backend:
 
 ```bash
-cd /home/ictd/Desktop/Network/nal
+cd nal
 source .venv/bin/activate
 uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
@@ -36,7 +36,7 @@ uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 Frontend:
 
 ```bash
-cd /home/ictd/Desktop/Network/nal/frontend
+cd nal/frontend
 npm run dev -- --host
 ```
 
