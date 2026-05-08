@@ -1,0 +1,169 @@
+{
+  "training_info": {
+    "dataset": "CIC-IDS / synthetic",
+    "total_samples": 2489930,
+    "training_samples": 1991944,
+    "test_samples": 497986,
+    "feature_count": 79,
+    "last_trained": "2026-04-13T13:45:38.806403"
+  },
+  "models": {
+    "random_forest": {
+      "name": "Random Forest",
+      "accuracy": 0.9978553613957019,
+      "precision": 0.9136372153407208,
+      "recall": 0.8611940416700581,
+      "f1_score": 0.8785735876175953,
+      "confusion_matrix": [
+        [
+          112,
+          62,
+          0,
+          0,
+          0,
+          0,
+          0,
+          2
+        ],
+        [
+          15,
+          493234,
+          8,
+          0,
+          94,
+          1,
+          5,
+          528
+        ],
+        [
+          2,
+          10,
+          124,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          1,
+          0,
+          3,
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          34,
+          3,
+          0,
+          733,
+          1,
+          0,
+          5
+        ],
+        [
+          0,
+          1,
+          0,
+          0,
+          0,
+          12,
+          0,
+          0
+        ],
+        [
+          0,
+          2,
+          0,
+          0,
+          0,
+          0,
+          118,
+          0
+        ],
+        [
+          1,
+          291,
+          0,
+          0,
+          0,
+          0,
+          0,
+          2582
+        ]
+      ],
+      "classes": [
+        "Anomaly",
+        "BENIGN",
+        "Bot",
+        "Brute Force",
+        "DDoS",
+        "Infiltration",
+        "PortScan",
+        "Web Attack"
+      ],
+      "per_class": {
+        "Anomaly": {
+          "precision": 0.8615,
+          "recall": 0.6364,
+          "f1_score": 0.732,
+          "support": 176
+        },
+        "BENIGN": {
+          "precision": 0.9992,
+          "recall": 0.9987,
+          "f1_score": 0.9989,
+          "support": 493885
+        },
+        "Bot": {
+          "precision": 0.9185,
+          "recall": 0.9051,
+          "f1_score": 0.9118,
+          "support": 137
+        },
+        "Brute Force": {
+          "precision": 1.0,
+          "recall": 0.6,
+          "f1_score": 0.75,
+          "support": 5
+        },
+        "DDoS": {
+          "precision": 0.8853,
+          "recall": 0.9446,
+          "f1_score": 0.914,
+          "support": 776
+        },
+        "Infiltration": {
+          "precision": 0.8571,
+          "recall": 0.9231,
+          "f1_score": 0.8889,
+          "support": 13
+        },
+        "PortScan": {
+          "precision": 0.9593,
+          "recall": 0.9833,
+          "f1_score": 0.9712,
+          "support": 120
+        },
+        "Web Attack": {
+          "precision": 0.8281,
+          "recall": 0.8984,
+          "f1_score": 0.8618,
+          "support": 2874
+        }
+      }
+    },
+    "isolation_forest": {
+      "name": "Isolation Forest",
+      "type": "unsupervised",
+      "n_estimators": 100,
+      "contamination": 0.01,
+      "training_samples": 79,
+      "n_features": 79
+    }
+  }
+}

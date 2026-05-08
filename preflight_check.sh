@@ -68,35 +68,42 @@ else
   pass "CORS_ALLOWED_ORIGINS is configured"
 fi
 
-DATA_ROOT="${NETGUARD_DATA_DIR:-$PROJECT_ROOT/..}"
+DATA_ROOT="${NETGUARD_DATA_DIR:-$PROJECT_ROOT/data}"
 print_section "Data paths"
 echo "Using data root: $DATA_ROOT"
 
+# The data root is auto-created by the backend on first init. Treat its
+# absence on a fresh clone as a warning, and try to create it here so the
+# runtime check confirms write permissions.
 if [ -d "$DATA_ROOT" ]; then
   pass "Data root directory exists"
 else
-  fail "Data root directory does not exist"
+  if mkdir -p "$DATA_ROOT" 2>/dev/null; then
+    pass "Data root directory created at $DATA_ROOT"
+  else
+    fail "Data root directory does not exist and could not be created"
+  fi
 fi
 
 if [ -f "$DATA_ROOT/flows.db" ]; then
   pass "flows.db exists"
 else
-  warn "flows.db missing (it will be created at runtime if writable)"
+  warn "flows.db missing (it will be created at runtime)"
 fi
 
 if [ -f "$DATA_ROOT/passive_timeline.db" ]; then
   pass "passive_timeline.db exists"
 else
-  warn "passive_timeline.db missing (it will be created at runtime if writable)"
+  warn "passive_timeline.db missing (it will be created at runtime)"
 fi
 
 if [ -d "$DATA_ROOT/temp_uploads" ]; then
   pass "temp_uploads directory exists"
 else
-  warn "temp_uploads directory missing (create for uploads)"
+  warn "temp_uploads directory missing (it will be created on first upload)"
 fi
 
-if [ -w "$DATA_ROOT" ]; then
+if [ -d "$DATA_ROOT" ] && [ -w "$DATA_ROOT" ]; then
   pass "Data root is writable"
 else
   fail "Data root is not writable"

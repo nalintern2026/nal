@@ -1,45 +1,94 @@
-# Python
+# ─────────────────────────────────────────────────────────────
+# NetGuard project .gitignore (lives at nal/)
+# ─────────────────────────────────────────────────────────────
+
+# Python bytecode / packaging
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
-env/
-venv/
-.venv/
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Jupyter Notebooks
-.ipynb_checkpoints
+# Virtual environments (the canonical project venv is `nal/.venv`,
+# but never commit any venv directory).
+env/
+venv/
+.venv/
+backend/.venv/
+frontend/.venv/
+
+# Jupyter
+.ipynb_checkpoints/
 profile_default/
 ipython_config.py
 
-# VS Code
+# Editors / IDEs
 .vscode/
+.idea/
 .history/
 
-# Environment / secrets
+# OS noise
+.DS_Store
+Thumbs.db
+
+# ── Environment / secrets ───────────────────────────────────
+# Block real env files but ALWAYS keep the template so a fresh
+# clone has a reference for required variables.
 .env
 .env.*
+!.env.example
 
-# Data & Large Files
+# ── Data & captures (never commit) ──────────────────────────
 data/
 training_pipeline/data/
-*.csv
 *.pcap
 *.pcapng
 *.zip
 *.tar.gz
 *.h5
 
-# Models & Artifacts
-*.pkl
-*.joblib
-training_pipeline/models/
-backend/app/temp_uploads/
+# Note: We do NOT blanket-ignore *.csv anymore because some test
+# fixtures may need to be tracked. If you want to ignore captured
+# CSVs, uncomment the next line.
+# *.csv
 
-# Logs & Results
+# ── Trained model artifacts ─────────────────────────────────
+# Default: ignore everything heavy under training_pipeline/models/.
+*.joblib
+
+# Re-include the small artifacts that ship with the repo so the
+# backend can run inference out-of-the-box. The large
+# `rf_model.pkl` is intentionally excluded — see README for how
+# to obtain or retrain it.
+training_pipeline/models/**/*.pkl
+!training_pipeline/models/unsupervised/if_model.pkl
+!training_pipeline/models/artifacts/scaler.pkl
+!training_pipeline/models/artifacts/label_encoder.pkl
+!training_pipeline/models/artifacts/feature_names.pkl
+
+# Always keep package markers and metrics metadata.
+!training_pipeline/models/__init__.py
+!training_pipeline/models/**/__init__.py
+!training_pipeline/models/metrics.json
+
+# Uploads staged by backend
+backend/app/temp_uploads/
+temp_uploads/
+
+# PCAP→CSV staging used during analysis (runtime only)
+temp_processing/
+
+# Local SQLite (in case NETGUARD_DATA_DIR points inside nal/)
+flows.db
+flows.db-shm
+flows.db-wal
+passive_timeline.db
+passive_timeline.db-shm
+passive_timeline.db-wal
+
+# Logs & build outputs
 results/
 logs/
 *.log
@@ -55,8 +104,8 @@ frontend/.env.development.local
 frontend/.env.test.local
 frontend/.env.production.local
 
-# Mac
-.DS_Store
+# Tests / caches
+.pytest_cache/
 
-# IDE
-.idea/
+# Legacy ignore file (kept here so it never gets committed by mistake)
+.gitignore.save

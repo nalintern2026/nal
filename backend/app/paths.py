@@ -11,10 +11,21 @@ WORKSPACE_ROOT = PROJECT_ROOT.parent
 
 
 def _data_root() -> Path:
+    """
+    Resolve the runtime data root.
+
+    Priority:
+      1. NETGUARD_DATA_DIR env var (absolute path)
+      2. Default: <project_root>/data  (i.e. nal/data/)
+
+    Keeping data inside the project keeps SQLite databases and
+    upload staging out of the user's home / parent directory and
+    makes the project self-contained for fresh clones.
+    """
     configured = os.environ.get("NETGUARD_DATA_DIR", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    return WORKSPACE_ROOT
+    return PROJECT_ROOT / "data"
 
 
 DATA_ROOT = _data_root()

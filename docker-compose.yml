@@ -10,8 +10,12 @@ services:
       - .:/app
       - /app/__pycache__
       - /app/.venv
+      - ./data:/app/data
     environment:
       - PYTHONPATH=/app:/app/backend
+      - NETGUARD_DATA_DIR=/app/data
+    env_file:
+      - .env
     restart: unless-stopped
 
   # React Frontend Dashboard
@@ -23,9 +27,12 @@ services:
       - "5173:5173"
     volumes:
       - ./frontend:/app
-      - /app/node_modules # Use container dependencies
+      - /app/node_modules
     environment:
-      - VITE_API_URL=http://backend:8000/api
+      # The browser runs on the host, so it must reach the API at
+      # localhost:8000 (the published backend port), not the
+      # internal docker-compose hostname `backend`.
+      - VITE_API_URL=http://localhost:8000/api
     depends_on:
       - backend
     restart: unless-stopped

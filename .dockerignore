@@ -1,17 +1,54 @@
+# Python build artifacts
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
+
+# Local virtualenvs (do not leak into the image)
 env/
 venv/
 .venv/
+backend/.venv/
+frontend/.venv/
+
+# Secrets / environment files (CRITICAL: never bake into images)
+.env
+.env.*
+!.env.example
+
+# Large datasets & captures
 training_pipeline/data/
+*.pcap
+*.pcapng
+*.csv
+
+# Trained model artifacts are mounted/downloaded at runtime, not baked
 training_pipeline/models/
+
+# Backend upload staging
 backend/app/temp_uploads/
+temp_uploads/
+
+# Frontend build outputs / node_modules
 frontend/node_modules/
 frontend/dist/
+
+# Local SQLite databases
+flows.db
+flows.db-shm
+flows.db-wal
+passive_timeline.db
+passive_timeline.db-shm
+passive_timeline.db-wal
+
+# VCS / IDE / OS
 .git/
+.gitignore.save
 .vscode/
 .idea/
+.history/
 .DS_Store
+
+# Tests / caches
+.pytest_cache/
